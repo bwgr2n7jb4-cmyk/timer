@@ -86,7 +86,7 @@ a.btn{text-decoration:none;color:inherit;display:inline-block}
 .cxl.hl input{ outline:3px solid var(--bad); outline-offset:1px }
 #sheetHost .field.hl input{ outline:3px solid var(--bad); outline-offset:1px }
 .calc .noRate{ justify-content:space-between; background:rgba(200,40,40,.08); border-left:4px solid var(--bad); padding:6px 8px; border-radius:6px; color:var(--bad) }
-body.field #modeBtn{ display:none } body.field .cust{ display:none !important } body.field .money{ display:none } body.field.hire .emp{ display:none } body.field.hire .split{ grid-template-columns:1fr }
+body.fieldapp #modeBtn{ display:none } body.fieldapp .cust{ display:none !important } body.fieldapp .money{ display:none } body.fieldapp.hire .emp{ display:none } body.fieldapp.hire .split{ grid-template-columns:1fr }
 .lockBox{border:1px solid var(--line);border-left:4px solid #70B42E;border-radius:8px;padding:10px 12px;background:rgba(112,180,46,.06)} .anbGrid.locked input:disabled,.anbGrid.locked select:disabled,.anbGrid.locked textarea:disabled{opacity:.75;cursor:not-allowed}
 .btn.btnGreen{border-color:color-mix(in srgb, var(--accent) 30%, var(--surface));background:color-mix(in srgb, var(--accent) 30%, var(--surface));color:var(--accent-ink);font-weight:700} .btn.btnGreen:hover{filter:brightness(.96)}
 .perShow{ border-left:4px solid var(--accent); padding:0 0 0 10px; gap:2px; align-self:end } .perShow b{ font-size:1.05rem; font-variant-numeric:tabular-nums; white-space:nowrap }
@@ -376,7 +376,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.1</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.2</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -391,7 +391,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v1.1";
+const VERSION = "v1.2";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -1106,7 +1106,8 @@ function applyMode(){
   if (FIELD) S.who = ""; // kNm Timer: alltid personen i lenken
   else { S.who = ls.get(WHO_KEY) || ""; if (S.who && !personIds().includes(S.who)) S.who = ""; } // samme personvalg på Mac og mobil
   document.body.classList.toggle("mob", m === "mobile");
-  document.body.classList.toggle("field", FIELD); document.body.classList.toggle("hire", FIELD && !!(FL.link && FL.link.h));
+  // «fieldapp», ikke «field»: .field er skjemafelt (display:grid) og ga marger i kNm Timer
+  document.body.classList.toggle("fieldapp", FIELD); document.body.classList.toggle("hire", FIELD && !!(FL.link && FL.link.h));
   document.body.classList.toggle("desk", m === "desktop");
   document.body.classList.toggle("mlight", m === "mobile" && mobLight);
   if (m !== lastMode){
