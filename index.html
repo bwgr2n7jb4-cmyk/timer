@@ -39,7 +39,7 @@ h3{font-size:1.05rem;font-weight:600}
 .label{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
 button,input,select,textarea{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--line)}
+.top{position:sticky;top:0;padding-top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--line)} /* dekker statuslinjen på iPhone (Hjem-skjerm-app) */
 .top-in{max-width:1100px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:12px}
 .brand{display:flex;align-items:baseline;gap:8px;min-width:0}
 .brand .mark{font-family:var(--f-display);font-weight:700;font-size:1.3rem}
@@ -87,6 +87,7 @@ a.btn{text-decoration:none;color:inherit;display:inline-block}
 #sheetHost .field.hl input{ outline:3px solid var(--bad); outline-offset:1px }
 .calc .noRate{ justify-content:space-between; background:rgba(200,40,40,.08); border-left:4px solid var(--bad); padding:6px 8px; border-radius:6px; color:var(--bad) }
 body.fieldapp #modeBtn{ display:none } body.fieldapp .cust{ display:none !important } body.fieldapp .money{ display:none } body.fieldapp.hire .emp{ display:none } body.fieldapp.hire .split{ grid-template-columns:1fr }
+.rateTiles{ grid-template-columns:repeat(3,minmax(0,1fr)) } .rateTiles .v{ font-size:1.25rem }
 .lockBox{border:1px solid var(--line);border-left:4px solid #70B42E;border-radius:8px;padding:10px 12px;background:rgba(112,180,46,.06)} .anbGrid.locked input:disabled,.anbGrid.locked select:disabled,.anbGrid.locked textarea:disabled{opacity:.75;cursor:not-allowed}
 .btn.btnGreen{border-color:color-mix(in srgb, var(--accent) 30%, var(--surface));background:color-mix(in srgb, var(--accent) 30%, var(--surface));color:var(--accent-ink);font-weight:700} .btn.btnGreen:hover{filter:brightness(.96)}
 .perShow{ border-left:4px solid var(--accent); padding:0 0 0 10px; gap:2px; align-self:end } .perShow b{ font-size:1.05rem; font-variant-numeric:tabular-nums; white-space:nowrap }
@@ -376,7 +377,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.2</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.3</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -391,7 +392,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v1.2";
+const VERSION = "v1.3";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -667,8 +668,12 @@ function customerCalc(date, contract, entries, ordBefore){
   const kind = dayKind(date, contract);
   const add = (code, label, qty, unit, rate) => { if (qty > 0 && rate !== 0){ const amount = qty*rate; res.items.push({code,label,qty,unit,rate,amount}); res.total += amount; } else if (qty > 0) res.items.push({code,label,qty,unit,rate:0,amount:0}); };
   if (priceModeOf(contract) === "dag" && num(contract.dayRate) > 0 && offshore){
-    add("dag","Dagrate offshore",1,"døgn",num(contract.dayRate));
-    const inc = num(contract.ordThreshold) || 12, otD = Math.max(0, t.arbeid - inc), holD = !!holidayName(date), rHOd = num(contract.rHelligOT);
+    const inc = num(contract.ordThreshold) || 12, lim = num(contract.offLimit) || offLimit();
+    // Langt opphold: etter grensen (standard 168 t) faktureres døgnet som overtid × ordinære timer (f.eks. 12 × 1 280) i stedet for dagraten
+    const left = ordBefore !== undefined && ordBefore !== null ? Math.max(0, lim - ordBefore) : Infinity;
+    if (left >= inc) add("dag","Dagrate offshore",1,"døgn",num(contract.dayRate));
+    else { if (left > 0) add("dag","Dagrate offshore",left / inc,"døgn",num(contract.dayRate)); add("dagls","Langt opphold (overtid i stedet for dagrate)",inc - left,"t",num(contract.rOT)); res.longStay = true; }
+    const otD = Math.max(0, t.arbeid - inc), holD = !!holidayName(date), rHOd = num(contract.rHelligOT);
     if (holD && rHOd) add("holot","Overtid helligdag (utover dagraten)",otD,"t",rHOd); else add("ot","Overtid (utover dagraten)",otD,"t",num(contract.rOT));
   } else {
     const thr = num(contract.ordThreshold) || 24;
@@ -2009,7 +2014,8 @@ function planRows(p){
   const dietDays = sum(r => r.diet), dietTxt = (() => { const m = {}; R.forEach(r => r.dParts.forEach(([n, v, l]) => { const k = l + "|" + v; m[k] = m[k] || [0, v, l]; m[k][0] += n * r.n; })); return Object.values(m).map(([n, v, l]) => `${hr(n)} ${l} × ${kr0(v)}`).join(" + "); })(), kmAll = sum(r => r.km), kmEgen = R.filter(r => r.car !== "ingen").reduce((a, r) => a + r.km * r.n, 0);
   const ot = num(p.otHours), ordH = Math.max(0, p.hours.work - ot), base = ordH * num(c.rOrd) + ot * num(c.rOT), extra = p.cust.work - base;
   const dagW = priceModeOf(c) === "dag" && num(c.dayRate) > 0 && (c.planType || "offshore") === "offshore", dagN = p.uneven ? p.personDays : p.days * p.crew;
-  const workWhy = dagW ? `${hr(dagN)} døgn × ${kr0(c.dayRate)}${ot ? ` + ${hr(ot)} t overtid × ${kr0(c.rOT)}` : ""}` : `${p.uneven ? p.personDays + " dagsverk" : (p.crew > 1 ? p.crew + " pers. × " : "") + p.days + " d"} × ${hr(p.H)} t = ${ot ? `${hr(ordH)} t × ${kr0(c.rOrd)} + ${hr(ot)} t × ${kr0(c.rOT)}` : `${hr(p.hours.work)} t × ${kr0(c.rOrd)}`}${Math.abs(extra) > 1 ? ` + tillegg ${kr0(extra)}` : ""}`;
+  const incW = num(c.ordThreshold) || 12, lsDen = incW * num(c.rOT) - num(c.dayRate), lsD = dagW && lsDen > 0 ? Math.round((p.cust.work - ot * num(c.rOT) - dagN * num(c.dayRate)) / lsDen * 10) / 10 : 0;
+  const workWhy = dagW ? `${hr(dagN - lsD)} døgn × ${kr0(c.dayRate)}${lsD > 0 ? ` + ${hr(lsD)} døgn langt opphold × ${kr0(incW * num(c.rOT))} (${hr(incW)} t × ${kr0(c.rOT)})` : ""}${ot ? ` + ${hr(ot)} t overtid × ${kr0(c.rOT)}` : ""}` : `${p.uneven ? p.personDays + " dagsverk" : (p.crew > 1 ? p.crew + " pers. × " : "") + p.days + " d"} × ${hr(p.H)} t = ${ot ? `${hr(ordH)} t × ${kr0(c.rOrd)} + ${hr(ot)} t × ${kr0(c.rOT)}` : `${hr(p.hours.work)} t × ${kr0(c.rOrd)}`}${Math.abs(extra) > 1 ? ` + tillegg ${kr0(extra)}` : ""}`;
   const legs = sum(r => r.legs);
   const mobWhy = fixed ? `${legs} × ${kr0(c.mobFee)} – reise, diett og km inkludert` : `${hr(p.hours.mob)} t × ${kr0(num(c.rReise))}`;
   const parts = (() => { const CR = crewRows(c), acc = {}; R.forEach(pr => { const r = CR[pr.i]; if (!r) return; (r.exps || []).forEach(e => { if (!EXP_T[e.t]) return; const u = EXP_T[e.t][1]; acc[e.t] = (acc[e.t] || 0) + num(e.a) * (u === "tur" ? pr.trips : u === "natt" ? pr.nights : 1) * (pr.n || 1); }); });
@@ -2274,6 +2280,7 @@ function hireFill(i, h){ if (!h) return; const g = k => $(`#pf-cr-${i}-${k}`);
   if (num(h.toll)){ const c = anbudRead(); const r = c && c.planCrewRows[i]; if (r && !(r.exps || []).some(x => x.t === "bom")){ r.exps = (r.exps || []).concat([{t:"bom", a:num(h.toll)}]); anbudSave(c); setTimeout(render, 0); } } }
 const EXP_UNIT = {tur:"per tur", natt:"per natt", tot:"totalt"};
 const expSumTxt = (t, a, pr) => { const u = EXP_T[t][1]; if (!pr || !num(a)) return ""; if (u === "tur") return `${pr.trips} ${pr.trips === 1 ? "tur" : "turer"} = ${kr0(num(a) * pr.trips)}`; if (u === "natt") return pr.nights ? `${pr.nights} n. = ${kr0(num(a) * pr.nights)}` : "ingen netter"; return ""; };
+const crewMapUrl = (a, b) => a || b ? `https://www.google.com/maps/dir/${encodeURIComponent(a || "")}/${encodeURIComponent(b || "")}` : "https://www.google.com/maps";
 function crewExpHtml(r, i, pr, fx){
   const used = r.exps.map(x => x.t), free = Object.keys(EXP_T).filter(t => !used.includes(t)), unit = EXP_UNIT;
   const lines = r.exps.map((x, j) => `<div class="cxl"><select data-ce="${i}" data-cj="${j}" data-cf="t" aria-label="Type">${[x.t].concat(free).map(t => `<option value="${t}"${t === x.t ? " selected" : ""}>${EXP_T[t][0]}</option>`).join("")}</select><input type="number" step="any" min="0" inputmode="decimal" data-ce="${i}" data-cj="${j}" data-cf="a" value="${esc(x.a ?? "")}" aria-label="Beløp"><span class="small cxs" data-cxs="${i}-${j}">${[unit[EXP_T[x.t][1]], expSumTxt(x.t, x.a, pr)].filter(Boolean).join(" · ")}</span><button class="btn ghost sm cxDel" data-a="crewExpDel" data-i="${i}" data-j="${j}" aria-label="Slett">×</button></div>`).join("");
@@ -2300,6 +2307,8 @@ function crewCard(r, i, many, pr, crewRowsCount){
       ${f("travelH", "Reisetid én vei (t)", "")}
       <label class="field"><span>Bil</span><select id="${id("car")}" data-cr="${i}" data-ck="car">${Object.entries(CAR).map(([k,l]) => `<option value="${k}"${(r.car || "ingen") === k ? " selected" : ""}>${l}</option>`).join("")}</select><small class="hint"></small></label>
       <div class="field" data-carf="1"${noCar ? " hidden" : ""}>${f("km", "Km tur/retur", "")}</div>
+      <label class="field" data-carf="1"${noCar ? " hidden" : ""}><span>Reiser til</span><input id="${id("to")}" data-cr="${i}" data-ck="to" type="text" value="${esc(v("to"))}" placeholder="${off ? "F.eks. Sola heliport" : "F.eks. Mongstad"}"><small class="hint">Brukes til Google Maps.</small></label>
+      <div class="row" data-carf="1"${noCar ? " hidden" : ""} style="gap:6px;grid-column:1/-1"><a class="btn sm" id="crmap-${i}" target="_blank" rel="noopener" title="Åpner ruten i Google Maps (ny fane). Km tur/retur = 2 × én vei." href="${crewMapUrl(v("from"), v("to"))}">Google Maps</a><a class="btn sm" target="_blank" rel="noopener" href="https://bompengekalkulator.no/" title="Åpnes i ny fane. Legg bomkostnaden inn som utlegg av typen Bom.">Bompengekalkulator</a></div>
       <div class="field" data-homef="1"${!off && pr && pr.home ? "" : " hidden"}>${f("homeTrips", "Turer ut og hjem", `Tomt = én per arbeidsuke.`, "number", `auto: ${pr ? pr.autoHome : 1}`)}</div>
       <div class="field" data-offf="1"${off ? "" : " hidden"}>${f("trips", "Rotasjoner", "1 = én tur ut og hjem.")}</div>
       ${travelSel(i, "before", "Reiser dagen før", r.before, "")}
@@ -2661,8 +2670,8 @@ function vOppsett(){
     <div><button class="btn" data-a="newHire">+ Ny innleid</button></div></section>
   <section class="card" style="display:grid;gap:12px"><h3>kNm Timer (mobilapp)</h3>
     <p class="small muted" style="margin:0">Egen app for ansatte og innleide uten Claude. Hver person får en personlig lenke med sine prosjekter og reiser, fører på telefonen og sender en fil som du leser inn her.</p>
-    <label class="field"><span>Adresse til appen</span><input id="set-profile-timerUrl" data-set="profile.timerUrl" type="url" placeholder="https://knm-timer.netlify.app/" value="${esc(s.profile.timerUrl || "")}"></label>
-    <div class="list">${[...(s.staff || []).map(x => [x.id, x.name, "Ansatt"]), ...(s.hires || []).map(h => [h.id, h.name, "Innleid"])].map(([id, n, k]) => `<div class="item" style="cursor:default"><div class="t"><b>${esc(n || "Uten navn")}</b><span class="small muted">${k}</span></div><button class="btn sm" data-a="fieldLink" data-w="${esc(id)}">Lag lenke</button></div>`).join("") || `<p class="small muted" style="margin:0">Legg inn ansatte eller innleide over.</p>`}</div>
+    <label class="field"><span>Adresse til appen</span><input id="set-profile-timerUrl" data-set="profile.timerUrl" type="url" placeholder="https://brukernavn.github.io/timer/" value="${esc(s.profile.timerUrl || "")}"></label>
+    <div class="list">${[["", s.profile.name, "Ansatt"], ...(s.staff || []).map(x => [x.id, x.name, "Ansatt"]), ...(s.hires || []).map(h => [h.id, h.name, "Innleid"])].map(([id, n, k]) => `<div class="item" style="cursor:default"><div class="t"><b>${esc(n || "Uten navn")}</b><span class="small muted">${k}</span></div><button class="btn sm" data-a="fieldLink" data-w="${esc(id)}">Lag lenke</button></div>`).join("") || `<p class="small muted" style="margin:0">Legg inn ansatte eller innleide over.</p>`}</div>
     <div><label class="btn btnGreen">Les inn fil fra kNm Timer<input type="file" id="timerFile" accept=".json,application/json" multiple hidden></label></div></section>
 ` : ""}
   ${T === "rules" ? `
@@ -3329,6 +3338,16 @@ async function estimateLeg(i){
 
 /* --- Contract editor --- */
 const HIRE_TEMPLATE = {from:"", car:"ingen", km:0, toll:0, travelH:0, name:"", company:"", orgnr:"", rOrd:0, rOT:0, thrOff:12, thrOn:8, offLimit:168, hotbedRate:0, helgTillegg:0, helligTillegg:0, rHellig:0, rHelligOT:0, rNight:0, weekendOT:true, sundayAsHoliday:false, rReise:0, rStandby:0, note:""};
+/* Timelønn og overtidssatser for et ansattkort (live mens du skriver) */
+function rateInfo(monthly, hourly){
+  const p = S.settings.pay, ts = num(hourly) || (num(monthly) && num(p.divisor) ? num(monthly) / num(p.divisor) : 0), base = p.includeBase ? 1 : 0;
+  const lo = ts * (num(p.pctLow) / 100 + base), hi = ts * (num(p.pctHigh) / 100 + base), sos = 1 + num(p.socialPct) / 100;
+  if (!ts) return `<p class="small muted" style="margin:0">Legg inn månedslønn eller timesats for å se timepris og overtid.</p>`;
+  return `<div class="anbsum"><div class="tiles rateTiles"><div class="tile t-e"><span class="label">Timelønn</span><span class="v num">${kr(ts)}</span><small>${num(hourly) ? "timesats" : `${kr0(monthly)} / ${hr(num(p.divisor))} t`}</small></div>
+    <div class="tile t-e"><span class="label">Overtid ${hr(num(p.pctLow))} %</span><span class="v num">${kr(lo)}</span><small>${base ? `timelønn × ${hr(1 + num(p.pctLow) / 100)}` : `tillegg ${hr(num(p.pctLow))} %`} · m/sosiale ${kr0(lo * sos)}</small></div>
+    <div class="tile t-e"><span class="label">Overtid ${hr(num(p.pctHigh))} %</span><span class="v num">${kr(hi)}</span><small>${base ? `timelønn × ${hr(1 + num(p.pctHigh) / 100)}` : `tillegg ${hr(num(p.pctHigh))} %`} · m/sosiale ${kr0(hi * sos)}</small></div></div></div>
+    <p class="small muted" style="margin:0">Offshore dekker fastlønnen ${hr(num(p.coveredOffshore))} t per dag. Overtid ${hr(num(p.pctLow))} % de første ${hr(num(p.threshold))} t, deretter ${hr(num(p.pctHigh))} %. Helg og helligdag: ${hr(num(p.pctHigh))} %.</p>`;
+}
 function staffEditor(id, conf){
   const ex = id ? staffById(id) : null, x = Object.assign({id: id || "e" + uid(), name:"", empNo:"", monthly:0, hourly:"", hotbed:"", nightAdd:""}, ex ? clone(ex) : {});
   editing = {kind:"staff", id: id || null, obj:x, confirmDel:!!conf};
@@ -3336,6 +3355,7 @@ function staffEditor(id, conf){
   const used = id ? Object.values(S.entries).some(e => whoOf(e) === id) || Object.values(S.trips).some(t => whoOf(t) === id) : false;
   openSheet(`<div class="row spread"><h2>${ex ? "Ansatt – " + esc(x.name) : "Ny ansatt"} <span class="tag emp">Ansatt</span></h2><button class="btn ghost" data-a="close">Lukk</button></div>
     <div class="fgrid">${f("name","Navn","text")}${f("empNo","Ansattnr.","text")}${f("monthly","Månedslønn kr")}${f("hourly","Timesats kr (overstyrer)","number","Tomt = månedslønn / deler.")}${f("hotbed","Hotbed kr per døgn","number",`Tomt = samme som ${esc(S.settings.profile.name || "hovedansatt")}.`, num(S.settings.pay.hotbed))}${f("nightAdd","Nattskifttillegg kr/t","number",`Tomt = samme som ${esc(S.settings.profile.name || "hovedansatt")}.`, num(S.settings.pay.nightAdd))}</div>
+    <div id="rateInfo">${rateInfo(x.monthly, x.hourly)}</div>
     <p class="small muted" style="margin:0">Prosentsatser, deler og timer dekket av fastlønn hentes fra «Lønnsregler for ansatt» i Innstillinger.</p>
     <div class="row spread"><div>${ex ? (editing.confirmDel ? `<button class="btn danger" data-a="delStaffYes">Bekreft sletting${used ? " (har føringer)" : ""}</button>` : `<button class="btn danger" data-a="delStaff">Slett</button>`) : ""}</div>
     <div class="row"><button class="btn" data-a="close">Avbryt</button><button class="btn pri" data-a="saveStaff">Lagre</button></div></div>
@@ -3347,6 +3367,7 @@ function mainEditor(){
   const f = (k, l, t, hint) => `<label class="field"><span>${l}</span><input data-mn="${k}" type="${t || "number"}" step="any" inputmode="decimal" value="${esc(x[k] ?? "")}">${hint ? `<small class="hint">${hint}</small>` : ""}</label>`;
   openSheet(`<div class="row spread"><h2>Ansatt – ${esc(x.name)} <span class="tag emp">Ansatt</span></h2><button class="btn ghost" data-a="close">Lukk</button></div>
     <div class="fgrid">${f("name","Navn","text")}${f("empNo","Ansattnr.","text")}${f("monthly","Månedslønn kr")}${f("hourly","Timesats kr (overstyrer)","number","Tomt = månedslønn / deler.")}${f("hotbed","Hotbed kr per døgn","number","Standard for andre ansatte.")}${f("nightAdd","Nattskifttillegg kr/t","number","Standard for andre ansatte.")}</div>
+    <div id="rateInfo">${rateInfo(x.monthly, x.hourly)}</div>
     <p class="small muted" style="margin:0">Prosentsatser, deler og timer dekket av fastlønn hentes fra «Lønnsregler for ansatt» i Innstillinger.</p>
     <div class="row" style="justify-content:flex-end"><button class="btn" data-a="close">Avbryt</button><button class="btn pri" data-a="saveMain">Lagre</button></div>`);
 }
@@ -3789,8 +3810,10 @@ document.addEventListener("change", ev => {
   if (el.id === "perHide"){ S.per.hideEmpty = el.checked; doRender(); }
   if (el.id === "mLight"){ mobLight = el.checked; ls.set(LIGHT_KEY, mobLight); doRender(); }
 });
-document.addEventListener("input", ev => { const t0 = ev.target; if (t0 && t0.dataset && t0.dataset.c === "mobFee"){ const h = $("#mobFeeHint"); if (h) h.innerHTML = mobFeeHint(t0.value); }
-  if (t0 && t0.dataset && t0.dataset.c === "rReise"){ const h = $("#rReiseHint"); if (h){ h.textContent = rReiseHint(t0.value, ($('[data-c="mobMode"]') || {}).value === "fixed"); h.style.color = num(t0.value) ? "" : "var(--warn)"; } } if (ev.target.dataset && ev.target.dataset.ck === "person" && ev.target.tagName === "SELECT"){ const v = ev.target.value, i = +ev.target.dataset.cr; crewPersonChange(i); const ns = document.querySelector(`select[data-ck="person"][data-cr="${i}"]`); if (ns) ns.dataset.done = v; return; }
+document.addEventListener("input", ev => { const t0 = ev.target;
+  if (t0 && t0.dataset && (t0.dataset.st === "monthly" || t0.dataset.st === "hourly" || t0.dataset.mn === "monthly" || t0.dataset.mn === "hourly")){ const k = t0.dataset.st ? "st" : "mn", g = n => ($(`#sheetHost [data-${k}="${n}"]`) || {}).value, ri = $("#rateInfo"); if (ri) ri.innerHTML = rateInfo(g("monthly"), g("hourly")); } if (t0 && t0.dataset && t0.dataset.c === "mobFee"){ const h = $("#mobFeeHint"); if (h) h.innerHTML = mobFeeHint(t0.value); }
+  if (t0 && t0.dataset && t0.dataset.c === "rReise"){ const h = $("#rReiseHint"); if (h){ h.textContent = rReiseHint(t0.value, ($('[data-c="mobMode"]') || {}).value === "fixed"); h.style.color = num(t0.value) ? "" : "var(--warn)"; } } if (ev.target.dataset && (ev.target.dataset.ck === "from" || ev.target.dataset.ck === "to") && ev.target.dataset.cr !== undefined){ const i = ev.target.dataset.cr, a = $(`#crmap-${i}`), fv = ($(`[data-cr="${i}"][data-ck="from"]`) || {}).value, tv = ($(`[data-cr="${i}"][data-ck="to"]`) || {}).value; if (a) a.href = crewMapUrl(fv, tv); }
+  if (ev.target.dataset && ev.target.dataset.ck === "person" && ev.target.tagName === "SELECT"){ const v = ev.target.value, i = +ev.target.dataset.cr; crewPersonChange(i); const ns = document.querySelector(`select[data-ck="person"][data-cr="${i}"]`); if (ns) ns.dataset.done = v; return; }
   if (ev.target.dataset && (ev.target.dataset.pf || ev.target.dataset.cr || ev.target.dataset.ce)) anbudLive(); });
 document.addEventListener("toggle", ev => { const t = ev.target; if (t && t.dataset && t.dataset.fold){ S.anbFold = S.anbFold || {}; S.anbFold[t.dataset.fold] = t.open; } }, true);
 document.addEventListener("keydown", ev => { if (ev.key === "Escape" && $("#sheetHost").innerHTML) tryClose(); });
@@ -3840,25 +3863,28 @@ async function fieldLink(w){
   if (!/^https:\/\//.test(base)){ toast("Legg inn adressen til kNm Timer først (https://…)"); const i = $("#set-profile-timerUrl"); if (i) i.focus(); return; }
   const url = base.replace(/#.*$/, "") + "#k=" + await packLink(linkPayload(w)), p = linkPayload(w);
   openSheet(`<div class="row spread"><h2>Lenke – ${esc(personName(w))}</h2><button class="btn ghost" data-a="close">Lukk</button></div>
+    ${(() => { const an = (S.settings.contracts || []).filter(c => statusOf(c) === "anbud" && crewRows(c).some(r => crewWho(r) === w)); return an.length ? `<p class="small" style="margin:0;color:var(--bad)">⚠ ${an.map(c => "«" + esc(c.name) + "»").join(", ")} er fortsatt anbud og følger ikke med. Trykk «Vunnet – gjør aktiv» under Anbud og lag lenken på nytt.</p>` : ""; })()}
+    <p class="small" style="margin:0"><b>Prosjekter:</b> ${p.cs.map(c => esc(c.name)).join(", ") || "ingen"}</p>
     <p class="small muted" style="margin:0">${p.cs.length} ${p.cs.length === 1 ? "prosjekt" : "prosjekter"} og ${Object.keys(p.ts).length} ${Object.keys(p.ts).length === 1 ? "reise" : "reiser"} følger med. Send lenken til ${esc(personName(w).split(" ")[0])} på SMS eller e-post. Åpnes i Safari og legges til på Hjem-skjermen. Nye prosjekter: lag ny lenke – den limes inn under «Send» i appen.</p>
     <textarea id="flTxt" readonly rows="4" style="font-size:.8rem">${esc(url)}</textarea>
     <div class="row" style="justify-content:flex-end"><button class="btn" data-a="flCopy">Kopier</button>${navigator.share ? `<button class="btn pri" data-a="flShare">Del …</button>` : ""}</div>`);
   editing = {kind:"flink", url};
 }
 /* ---------- Innlesing av fil fra kNm Timer (kNm Prosjekt) ---------- */
-const dataUrlBlob = async u => (await fetch(u)).blob();
+const dataUrlBlob = async u => { const m = String(u).match(/^data:([^;,]*)(;base64)?,(.*)$/s); if (!m) throw {code:"bad_data"};
+  const bin = m[2] ? atob(m[3]) : decodeURIComponent(m[3]), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return new Blob([a], {type: m[1] || "image/jpeg"}); };
 async function importTimerFile(file){
   let d; try { d = JSON.parse(await file.text()); } catch(e){ toast("Filen kunne ikke leses"); return; }
   if (!d || d.fmt !== "knm-timer"){ toast("Dette er ikke en fil fra kNm Timer"); return; }
   const w = d.w; if (!personIds().includes(w)){ toast(`Ukjent person i filen (${d.n || w}). Legg personen inn under Innstillinger først.`); return; }
-  const R = {nyE:0, oppE:0, likE:0, slE:0, dobbel:[], last:0, nyT:0, oppT:0, utlegg:0, kv:0, kvMangler:0, feil:[]}, pre = "f_" + (w || "meg") + "_";
+  const R = {nyE:0, oppE:0, likE:0, slE:0, dobbel:[], last:0, nyT:0, oppT:0, utlegg:0, kv:0, kvIkkeIFil:0, kvFeil:[], feil:[]}, pre = "f_" + (w || "meg") + "_";
   const rcMap = {};
   const getRc = async rid => { if (!rid) return null; if (rcMap[rid]) return rcMap[rid];
     // Allerede lastet opp tidligere (samme kvittering i en tidligere fil)?
     for (const t of Object.values(S.trips)) for (const x of (t.expenses || [])) if (x.frc === rid && x.receipt) return rcMap[rid] = {id: x.receipt, url: x.receiptUrl};
-    const du = d.rc && d.rc[rid]; if (!du){ R.kvMangler++; return null; }
-    if (!S.assets){ R.kvMangler++; return null; }
-    try { const r = await S.assets.upload(await dataUrlBlob(du), {type: "image/jpeg"}); R.kv++; return rcMap[rid] = {id: r.id, url: r.url}; } catch(e){ R.kvMangler++; return null; } };
+    const du = d.rc && d.rc[rid]; if (!du){ R.kvIkkeIFil++; return null; }
+    if (!S.assets){ R.kvFeil.push("lagring av kvitteringer er ikke tilgjengelig i denne visningen"); return null; }
+    try { const b = await dataUrlBlob(du); const r = await S.assets.upload(b, {type: b.type || "image/jpeg"}); R.kv++; return rcMap[rid] = {id: r.id, url: r.url}; } catch(e){ R.kvFeil.push((e && (e.code || e.message)) || "ukjent feil"); return null; } };
   const fixExp = async x => { const y = clone(x); const rid = x.receipt; delete y.receipt; delete y.receiptUrl; if (rid){ y.frc = rid; const r = await getRc(rid); if (r){ y.receipt = r.id; y.receiptUrl = r.url; } } return y; };
   toast("Leser inn …");
   // Timer
@@ -3899,7 +3925,8 @@ async function importTimerFile(file){
   const warn = [];
   if (R.dobbel.length) warn.push(`Ikke lest inn – ${nm} har allerede timer på samme prosjekt ført av deg: ${[...new Set(R.dobbel)].map(fmtDate).join(", ")}. Slett din føring og les inn på nytt hvis appen skal gjelde.`);
   if (R.last) warn.push(`${R.last} endringer gjelder signert/låst periode eller avsluttet prosjekt og ble ikke lagret.`);
-  if (R.kvMangler) warn.push(`${R.kvMangler} kvitteringer manglet i filen eller kunne ikke lagres.`);
+  if (R.kvIkkeIFil) warn.push(`${R.kvIkkeIFil} ${R.kvIkkeIFil === 1 ? "kvittering" : "kvitteringer"} var ikke med i filen (eldre enn 60 dager, eller ikke lagret på telefonen). Be ${nm} sende på nytt, eller legg bildet ved selv på utlegget.`);
+  if (R.kvFeil.length) warn.push(`${R.kvFeil.length} ${R.kvFeil.length === 1 ? "kvittering" : "kvitteringer"} kunne ikke lagres (${[...new Set(R.kvFeil)].join(", ")}). Les inn samme fil på nytt – utleggene blir ikke doble.`);
   R.feil.forEach(x => warn.push(x));
   openSheet(`<div class="row spread"><h2>Lest inn – ${esc(personName(w))}</h2><button class="btn ghost" data-a="close">Lukk</button></div>
     <p class="small muted" style="margin:0">Sendt ${d.sent ? esc(fmtDateY(d.sent.slice(0,10))) + " kl. " + esc(d.sent.slice(11,16)) : "?"} fra kNm Timer ${esc(d.app || "")}.</p>
