@@ -370,14 +370,14 @@ body.mob .btn{ padding:10px 16px }
 .wday .h{ font:700 1.3rem var(--f-mono) }
 .wday .s{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 .plan{ white-space:pre-wrap; font-size:1.05rem; line-height:1.55 }
-.photoBtn{ display:grid; place-items:center; min-height:64px; border:1px dashed var(--line); border-radius:12px; cursor:pointer; font-weight:600 }
+.photoRow{ display:grid; grid-template-columns:1fr 1fr; gap:10px } .photoBtn{ display:grid; text-align:center; padding:0 8px; place-items:center; min-height:64px; border:1px dashed var(--line); border-radius:12px; cursor:pointer; font-weight:600 }
 
 @media (prefers-reduced-motion:no-preference){.sheet{animation:up .18s ease-out}@keyframes up{from{transform:translateY(16px);opacity:.6}}}
 </style>
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.3</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.4</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -392,7 +392,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v1.3";
+const VERSION = "v1.4";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -474,13 +474,13 @@ function dayKind(s, contract){
 
 /* ============ State & storage ============ */
 const WHO_KEY = "knm_who", PROJ_KEY = "knm_proj";
-const S = { who:"", uid:null, db:null, assets:null, downloads:null, sample:null, mode:"init", settings:clone(DEF), entries:{}, trips:{}, approvals:{}, tab:"", month:todayStr().slice(0,7), report:null, day:todayStr(), week:mondayOf(todayStr()), tripView:null, per:{kind:"week", month:todayStr().slice(0,7), contractId:"", from:todayStr(), to:addDays(todayStr(),13), hideEmpty:null} };
+const S = { who:"", uid:null, db:null, assets:null, downloads:null, sample:null, mode:"init", settings:clone(DEF), entries:{}, trips:{}, approvals:{}, trash:{}, tab:"", month:todayStr().slice(0,7), report:null, day:todayStr(), week:mondayOf(todayStr()), tripView:null, per:{kind:"week", month:todayStr().slice(0,7), contractId:"", from:todayStr(), to:addDays(todayStr(),13), hideEmpty:null} };
 let queue = [];
-let refs = null;
+let refs = null, trashPurged = false;
 const cacheKey = () => `knm_tb_cache_${S.uid||"local"}`;
 const queueKey = () => `knm_tb_queue_${S.uid||"local"}`;
-function saveCache(){ ls.set(cacheKey(), {settings:S.settings, entries:S.entries, trips:S.trips, approvals:S.approvals}); }
-function loadCache(){ const c = ls.get(cacheKey()); if (c){ S.settings = deepMerge(clone(DEF), c.settings||{}); S.entries = c.entries||{}; S.trips = c.trips||{}; S.approvals = c.approvals||{}; } queue = ls.get(queueKey()) || []; }
+function saveCache(){ ls.set(cacheKey(), {settings:S.settings, entries:S.entries, trips:S.trips, approvals:S.approvals, trash:S.trash}); }
+function loadCache(){ const c = ls.get(cacheKey()); if (c){ S.settings = deepMerge(clone(DEF), c.settings||{}); S.entries = c.entries||{}; S.trips = c.trips||{}; S.approvals = c.approvals||{}; S.trash = c.trash||{}; } queue = ls.get(queueKey()) || []; }
 function setSync(state, text){ const el = $("#sync"); el.title = text + " · " + VERSION; el.innerHTML = `<i class="dot ${state}"></i><span>${esc(text)}</span>`; }
 function updateSyncBadge(){
   if (FIELD){ const ch = FL.lastChange > FL.lastSent; return setSync(ch ? "wait" : "ok", ch ? "Ikke sendt" : "Alt sendt"); }
@@ -497,8 +497,10 @@ function persist(kind, id, data){
     const cs = x => x && x.contractId && contractById(x.contractId) ? statusOf(contractById(x.contractId)) : "aktiv";
     if ((S[kind][id] && cs(S[kind][id]) !== "aktiv") || (data && cs(data) !== "aktiv")){ const st = cs(data || S[kind][id]) !== "aktiv" ? cs(data || S[kind][id]) : cs(S[kind][id]); toast(`Kontrakten har status «${STATUS[st]}». Endre status under Anbud for å føre eller endre.`); render(); return false; }
   }
+  if (kind === "entries" && data && num(data.mob) && !hasMobLine(data)) data.mob = 0; // ingen mob.-linje = ingen mob. (skjult rest etter retting)
   if (kind === "settings") S.settings = data;
-  else if (data === null) delete S[kind][id]; else S[kind][id] = data;
+  else if (data === null){ const old = S[kind][id]; delete S[kind][id]; if (old && !FIELD && (kind === "entries" || kind === "trips")) trashPut(kind, id, old); }
+  else S[kind][id] = data;
   if (FIELD && kind !== "settings") fieldTomb(kind, data === null ? id : undefined);
   saveCache();
   if (S.mode === "db"){
@@ -510,6 +512,31 @@ function persist(kind, id, data){
   render();
 }
 let flushing = false;
+/* Vern mot gammel synk: det som nettopp er lagret fra denne enheten vinner over en eldre kopi fra databasen i 60 s */
+const recentW = new Map(), RECENT_MS = 60000;
+function recentOverlay(kind, next){ const now = Date.now();
+  for (const [k, r] of recentW){ if (now - r.at > RECENT_MS){ recentW.delete(k); continue; } if (r.kind !== kind) continue;
+    if (r.data === null) delete next[r.id]; else next[r.id] = r.data; } }
+/* Papirkurv: slettede føringer og reiser tas vare på i 30 dager */
+const TRASH_DAYS = 30;
+function trashSrc(){ try{ return String(new Error().stack || "").split("\n").map(l => (l.match(/at\s+([\w$.]+)/) || [])[1]).filter(n => n && !/^(trashSrc|trashPut|persist|HTMLDocument|Array|Object)/.test(n)).slice(0, 3).join(" < "); }catch(e){ return ""; } }
+function trashPut(kind, id, old){ const tid = "t" + uid();
+  persist("trash", tid, {kind, id, data: clone(old), at: Date.now(), who: whoOf(old), date: old.date || (old.start || "").slice(0, 10), contractId: old.contractId || "", src: trashSrc(), ver: VERSION}); }
+function trashPurge(){ const lim = Date.now() - TRASH_DAYS * 864e5; Object.entries(S.trash || {}).forEach(([k, t]) => { if (!t || (t.at || 0) < lim) persist("trash", k, null); }); }
+function trashRestore(tid){ const t = S.trash[tid]; if (!t) return;
+  if (S[t.kind][t.id]){ toast("Føringen finnes allerede"); return; }
+  if (persist(t.kind, t.id, Object.assign(clone(t.data), {updated: Date.now()})) === false) return;
+  persist("trash", tid, null); toast(t.kind === "trips" ? "Reisen er hentet tilbake" : "Føringen er hentet tilbake"); trashSheet(); }
+const trashLines = t => t.kind === "trips" ? "Reise" : (t.data.lines || []).map(l => `${({arbeid:"Arbeid", reise:"Reise", mob:"Mob.", standby:"Standby"})[l.type] || l.type} ${l.start && l.end ? l.start + "–" + l.end : hr(lineHours(l)) + " t"}`).join(", ");
+const TRASH_WHY = {inlineChange:"tømt i Timeliste", copyDo:"erstattet ved Kopier timer", importTimerFile:"innlesing fra kNm Timer", trashRestore:"papirkurv"};
+const trashWhy = src => { const k = Object.keys(TRASH_WHY).find(n => src.includes(n)); return k ? TRASH_WHY[k] : /onclick|click|handle/i.test(src) ? "slettet med knapp" : src; };
+function trashSheet(){ editing = {kind:"trash"};
+  const arr = Object.entries(S.trash || {}).filter(([, t]) => t && t.data).sort((a, b) => b[1].at - a[1].at);
+  const tm = ms => { const d = new Date(ms); return `${d.getDate()}.${d.getMonth()+1}. kl. ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+  openSheet(`<div class="row spread"><h2>Papirkurv</h2><button class="btn ghost" data-a="close">Lukk</button></div>
+    <p class="small muted" style="margin:0">Slettede føringer og reiser lagres i ${TRASH_DAYS} dager.</p>
+    ${arr.length ? `<div class="list">${arr.map(([k, t]) => { const c = contractById(t.contractId); return `<div class="item" style="cursor:default"><div class="t"><b>${t.date ? fmtDateY(t.date) : "–"} · ${esc(personName(t.who))}</b><span class="small">${esc(trashLines(t))}${c ? " · " + esc(c.name) : ""}</span><span class="small muted">Slettet ${tm(t.at)}${t.src ? ` · ${esc(trashWhy(t.src))}` : ""}</span></div><button class="btn sm" data-a="trashRestore" data-id="${esc(k)}">Hent tilbake</button></div>`; }).join("")}</div>` : `<p class="small muted" style="margin:0">Papirkurven er tom.</p>`}`); }
+
 const dropQ = q => { const i = queue.indexOf(q); if (i >= 0) queue.splice(i, 1); ls.set(queueKey(), queue); };
 async function flush(){
   if (flushing || S.mode !== "db" || !refs) return;
@@ -520,6 +547,7 @@ async function flush(){
       const ref = q.kind === "settings" ? refs.app : refs[q.kind].doc(q.id);
       try{
         if (q.data === null) await ref.delete(); else await ref.set(q.data);
+        recentW.set(q.kind + "|" + q.id, {kind:q.kind, id:q.id, data:q.data, at:Date.now()});
         // Fjern akkurat denne endringen. En nyere endring på samme føring (lagt i køen mens denne ble skrevet) skal stå igjen og skrives etterpå.
         dropQ(q);
       }catch(e){
@@ -555,9 +583,10 @@ async function boot(){
   }
   S.db = db; S.uid = id; S.mode = "db"; loadCache();
   const base = `data/users/${id}/app`;
-  refs = { app: db.doc(base), entries: db.doc(base).collection("entries"), trips: db.doc(base).collection("trips"), approvals: db.doc(base).collection("approvals") };
+  refs = { app: db.doc(base), entries: db.doc(base).collection("entries"), trips: db.doc(base).collection("trips"), approvals: db.doc(base).collection("approvals"), trash: db.doc(base).collection("trash") };
   refs.app.onSnapshot(snap => {
     if (pendingIds("settings").size) return;
+    { const r = recentW.get("settings|app"); if (r && Date.now() - r.at < RECENT_MS && snap.exists && JSON.stringify(snap.data()) !== JSON.stringify(r.data)) return; }
     if (snap.exists){ S.settings = deepMerge(clone(DEF), clone(snap.data())); saveCache(); render(); logoFixOnce(); payFix75Once(); }
     else if (!snap.metadata.fromCache){
       const s = clone(DEF);
@@ -568,10 +597,11 @@ async function boot(){
   const sub = (kind, ref) => ref.onSnapshot(qs => {
     const pend = pendingIds(kind), next = {};
     qs.docs.forEach(d => { next[d.id] = clone(d.data()); });
+    recentOverlay(kind, next);
     for (const q of queue) if (q.kind === kind){ if (q.data === null) delete next[q.id]; else next[q.id] = q.data; }
-    S[kind] = next; saveCache(); render();
+    S[kind] = next; if (kind === "trash" && !trashPurged && !qs.metadata?.fromCache){ trashPurged = true; trashPurge(); } saveCache(); render();
   }, err => setSync("bad","Mistet kontakt med databasen"));
-  sub("entries", refs.entries); sub("trips", refs.trips); sub("approvals", refs.approvals);
+  sub("entries", refs.entries); sub("trips", refs.trips); sub("approvals", refs.approvals); sub("trash", refs.trash);
   updateSyncBadge(); flush();
 }
 
@@ -608,7 +638,12 @@ function legsToExp(tr){ tr.legs = tr.legs || []; tr.expenses = tr.expenses || []
     delete l.toll; delete l.ferry; if (l.genSrc){ delete l.genSrc.toll; delete l.genSrc.ferry; } });
   return tr; }
 const expLabel = x => { const a = [EXP_TYPE[x.type] || "", (x.vendor || "").trim(), (x.text || "").trim()].filter(Boolean); return a.filter((v, i) => a.findIndex(w => w.toLowerCase() === v.toLowerCase()) === i).join(" – ") || "Utlegg"; };
-const expBilled = (x, t) => { const c = t && contractById(t.contractId); return c && mobModeOf(c) === "fixed" ? !!x.fxBill : x.rebill !== false; };
+// Fastpris onshore: fastprisen dekker bare reisen ut/hjem. Diett og hotell under oppholdet faktureres som etter regning.
+const fxOn = c => !!c && mobModeOf(c) === "fixed" && (c.planType || "offshore") === "felt";
+// Km til kunde: etter regning = «Km faktureres» (standard ja). Fastpris = bare når «Km i tillegg til fastpris» er valgt.
+const kmBilled = c => !!c && (mobModeOf(c) === "fixed" ? !!c.kmFx : (c.kmBill || "auto") !== "none");
+const fxHotel = (x, c) => fxOn(c) && x.type === "hotell";
+const expBilled = (x, t) => { const c = t && contractById(t.contractId); return c && mobModeOf(c) === "fixed" && !fxHotel(x, c) ? !!x.fxBill : x.rebill !== false; };
 const bfLabel = (toll, ferry) => num(toll) > 0 && num(ferry) > 0 ? "Bom og ferje" : num(ferry) > 0 ? "Ferje" : "Bom";
 // Estimat fra anbud: linjer laget fra mannskapskortet som verken er endret eller bekreftet
 const legEst = l => !!(l && l.gen && !l.conf && (!l.genSrc || num(l.km) === num(l.genSrc.km)));
@@ -658,19 +693,25 @@ function tourOrdBefore(date, who){
   for (let i = 0; i < 200; i++){ const v = ordHoursOn(d, who); if (v === null) break; sum += v; d = addDays(d, -1); }
   return sum;
 }
+// Antall sammenhengende offshoredøgn før datoen (samme opphold). Brukes for dagrate: grensen telles i hele døgn mot kunde.
+function tourDaysBefore(date, who){ let n = 0, d = addDays(date, -1); for (let i = 0; i < 200; i++){ if (ordHoursOn(d, who) === null) break; n++; d = addDays(d, -1); } return n; }
 const offLimit = () => num(S.settings.pay.offLimit) || 168;
-function customerCalc(date, contract, entries, ordBefore){
+function customerCalc(date, contract, entries, ordBefore, daysBefore){
   const res = {items:[], total:0};
   if (!contract) return res;
   const t = {arbeid:0, reise:0, standby:0, mob:0}; let mob = 0, offshore = false;
-  entries.forEach(e => { const x = entryTotals(e); t.arbeid += x.arbeid; t.reise += x.reise; t.standby += x.standby; t.mob += x.mob; mob += Math.max(num(e.mob), x.mob > 0 ? 1 : 0); if (e.dayType === "offshore") offshore = true; });
   const fixed = mobModeOf(contract) === "fixed";
+  // Fastpris: dag med mob. = én vei. Onshore-prosjekt: også dag med reise (reisen ut/hjem føres som reise). Offshore teller reise til heliport ikke ekstra.
+  entries.forEach(e => { const x = entryTotals(e); t.arbeid += x.arbeid; t.reise += x.reise; t.standby += x.standby; t.mob += x.mob; if (x.mob > 0 || (fixed && fxOn(contract) && x.reise > 0)) mob += Math.max(num(e.mob), 1); if (e.dayType === "offshore") offshore = true; });
   const kind = dayKind(date, contract);
   const add = (code, label, qty, unit, rate) => { if (qty > 0 && rate !== 0){ const amount = qty*rate; res.items.push({code,label,qty,unit,rate,amount}); res.total += amount; } else if (qty > 0) res.items.push({code,label,qty,unit,rate:0,amount:0}); };
-  if (priceModeOf(contract) === "dag" && num(contract.dayRate) > 0 && offshore){
+  const dagDay = priceModeOf(contract) === "dag" && num(contract.dayRate) > 0 && offshore;
+  if (dagDay){
     const inc = num(contract.ordThreshold) || 12, lim = num(contract.offLimit) || offLimit();
     // Langt opphold: etter grensen (standard 168 t) faktureres døgnet som overtid × ordinære timer (f.eks. 12 × 1 280) i stedet for dagraten
-    const left = ordBefore !== undefined && ordBefore !== null ? Math.max(0, lim - ordBefore) : Infinity;
+    // Døgnteller (v27.4): de første lim/inc døgnene (168/12 = 14) får hel dagrate, deretter hele døgn som overtid × inc. Ingen brøkdeler.
+    const dayLim = Math.max(1, Math.round(lim / inc));
+    const left = typeof daysBefore === "number" ? (daysBefore < dayLim ? Infinity : 0) : ordBefore !== undefined && ordBefore !== null ? Math.max(0, lim - ordBefore) : Infinity;
     if (left >= inc) add("dag","Dagrate offshore",1,"døgn",num(contract.dayRate));
     else { if (left > 0) add("dag","Dagrate offshore",left / inc,"døgn",num(contract.dayRate)); add("dagls","Langt opphold (overtid i stedet for dagrate)",inc - left,"t",num(contract.rOT)); res.longStay = true; }
     const otD = Math.max(0, t.arbeid - inc), holD = !!holidayName(date), rHOd = num(contract.rHelligOT);
@@ -694,7 +735,7 @@ function customerCalc(date, contract, entries, ordBefore){
     if (!offshore && kind === "helg" && num(contract.helgTillegg)) add("helg","Helgetillegg",t.arbeid,"t",num(contract.helgTillegg));
     if (!offshore && kind === "hellig" && num(contract.helligTillegg) && !(hol && rH)) add("hellig","Helligdagstillegg",t.arbeid,"t",num(contract.helligTillegg));
   }
-  add("standby","Standby / venting",t.standby,"t",num(contract.rStandby));
+  if (!dagDay) add("standby","Standby / venting",t.standby,"t",num(contract.rStandby)); // Dagrate dekker standby
   if (offshore && entries.some(e => e.hotbed) && num(contract.hotbedRate)) add("hotbed","Hotbed (delt lugar)",1,"døgn",num(contract.hotbedRate));
   // Reise og mob./demob. er samme sats (Reisetid kr/t). Fast pris per vei velges med Faktureringsform.
   if (!fixed) add("reise","Reisetid/mob.",t.reise + t.mob,"t",num(contract.rReise));
@@ -703,6 +744,20 @@ function customerCalc(date, contract, entries, ordBefore){
 }
 function hourlyRate(){ const p = S.settings.pay; return num(p.hourly) || (num(p.monthly) && num(p.divisor) ? num(p.monthly)/num(p.divisor) : 0); }
 /* Lønn (tillegg): per dato, alle føringer som ikke er kontor */
+/* Lunsj: onshore trekkes 30 min med mindre prosjektet har «Betalt lunsj: Ja». Offshore trekkes aldri. */
+const lunchMin = (c, dayType) => dayType === "felt" && !(c && c.paidLunch) ? 30 : 0;
+// Førte onshore-dager på prosjektet der pausen er standard (0 eller 30) og avviker fra valget. Signerte dager og egne pauser røres ikke.
+function lunchTargets(cid){ const c = contractById(cid), want = lunchMin(c, "felt");
+  return Object.entries(S.entries).filter(([, e]) => e.contractId === cid && e.dayType === "felt" && !isLocked(e.date, cid) && (e.lines || []).some(l => l.type === "arbeid" && l.start && l.end && [0, 30].includes(num(l.pause)) && num(l.pause) !== want)); }
+function lunchAsk(cid){ const n = lunchTargets(cid), c = contractById(cid); if (!n.length) return false; const want = lunchMin(c, "felt");
+  openSheet(`<div class="row spread"><h2>Bruke på førte dager?</h2><button class="btn ghost" data-a="close">Lukk</button></div>
+    <p style="margin:0">${n.length} førte onshore-${n.length === 1 ? "dag" : "dager"} på ${esc(c.name)} har ${want ? "ikke lunsjtrekk" : "30 min lunsjtrekk"}.</p>
+    <p class="small muted" style="margin:0">${want ? "Ja: 30 min trekkes på disse dagene." : "Ja: lunsjtrekket fjernes på disse dagene."} Gjelder alle personer på prosjektet, både faktura og lønn. Signerte dager og egne pauser (f.eks. 45 eller 60 min) endres ikke.</p>
+    <div class="row spread"><span></span><div class="row"><button class="btn" data-a="close">Bare nye føringer</button><button class="btn pri" data-a="lunchApply" data-id="${esc(cid)}">Bruk på ${n.length} ${n.length === 1 ? "dag" : "dager"}</button></div></div>`);
+  return true; }
+function lunchApply(cid){ const want = lunchMin(contractById(cid), "felt"); let k = 0;
+  lunchTargets(cid).forEach(([id, e]) => { const r = clone(e); r.lines.forEach(l => { if (l.type === "arbeid" && l.start && l.end && [0, 30].includes(num(l.pause))) l.pause = want; }); r.updated = Date.now(); if (persist("entries", id, r) !== false) k++; });
+  closeSheet(); toast(`${want ? "30 min lunsj trukket" : "Lunsjtrekk fjernet"} på ${k} ${k === 1 ? "dag" : "dager"}`); }
 /* Arbeidstid onshore per prosjekt (følger kunden). Alle med 30 min pause = 7,5 t. */
 const WORKDAY = {"0700":["07:00","15:00"], "0730":["07:30","15:30"], "0800":["08:00","16:00"]};
 const workDayOf = c => WORKDAY[(c && c.workDay) || "0700"] || WORKDAY["0700"];
@@ -826,13 +881,13 @@ function tripMoney(tr, from, to){
   const d = {rows, diet: rows.reduce((s,r) => s + r.amt, 0), night: rows.reduce((s,r) => s + r.night, 0), taxfree: rows.reduce((s,r) => s + (r.tf||0), 0)};
   const fixedMob = !!(c && mobModeOf(c) === "fixed");
   let custDiet = 0, custDietDays = 0;
-  if (c && !fixedMob) d.rows.forEach(r => { if (!rowBilled(tr, r, c)) return; custDietDays++; custDiet += (num(c.dietRate) > 0 ? num(c.dietRate) : r.base)*(1 - (r.ded||0)/100) + r.night; });
+  if (c && (!fixedMob || fxOn(c))) d.rows.forEach(r => { if (!rowBilled(tr, r, c)) return; custDietDays++; custDiet += (num(c.dietRate) > 0 ? num(c.dietRate) : r.base)*(1 - (r.ded||0)/100) + r.night; });
   let km = 0, kmAmt = 0, kmTax = 0, tollFerry = 0, refund = 0, rebill = 0, kmCust = 0; const expLines = [];
   (tr.legs||[]).filter(l => inR(l.date || t0)).forEach(l => { const x = legCalc(l); km += num(l.km); kmAmt += x.amount; kmTax += x.taxable; tollFerry += x.toll + x.ferry;
     if (l.paidBy !== "firma") refund += x.toll + x.ferry;
-    if (l.rebill !== false && !fixedMob){ rebill += (x.toll + x.ferry); if (x.toll + x.ferry > 0) expLines.push({text:`${bfLabel(x.toll, x.ferry)}${[l.from, l.to].filter(Boolean).join("–") ? " " + [l.from, l.to].filter(Boolean).join("–") : ""}`, date:l.date || t0, base:x.toll + x.ferry}); if (c && (c.kmBill || "auto") !== "none") kmCust += num(c.kmRate) > 0 ? num(l.km)*num(c.kmRate) : x.full; } });
+    if (l.rebill !== false && !fixedMob){ rebill += (x.toll + x.ferry); if (x.toll + x.ferry > 0) expLines.push({kind: num(x.ferry) > 0 && num(x.toll) > 0 ? "bom_ferje" : num(x.ferry) > 0 ? "ferje" : "bom", text:`${bfLabel(x.toll, x.ferry)}${[l.from, l.to].filter(Boolean).join("–") ? " " + [l.from, l.to].filter(Boolean).join("–") : ""}`, date:l.date || t0, base:x.toll + x.ferry}); } if (l.rebill !== false && kmBilled(c)) kmCust += num(c.kmRate) > 0 ? num(l.km)*num(c.kmRate) : x.full; });
   let exp = 0;
-  (tr.expenses||[]).filter(x => inR(x.date || t0)).forEach(x => { exp += num(x.amount); if (x.paidBy !== "firma") refund += num(x.amount); if (expBilled(x, tr)){ rebill += num(x.amount); if (num(x.amount) > 0) expLines.push({text:expLabel(x), date:x.date || t0, base:num(x.amount)}); } });
+  (tr.expenses||[]).filter(x => inR(x.date || t0)).forEach(x => { exp += num(x.amount); if (x.paidBy !== "firma") refund += num(x.amount); if (expBilled(x, tr)){ rebill += num(x.amount); if (num(x.amount) > 0) expLines.push({kind:x.type || "annet", text:expLabel(x), date:x.date || t0, base:num(x.amount)}); } });
   const taxableDiet = Math.max(0, d.diet + d.night - d.taxfree);
   return {diet:d.diet, night:d.night, dietTaxable:taxableDiet, km, kmAmt, kmTax, tollFerry, exp, refund,
           toEmployee: d.diet + d.night + kmAmt + refund, custExp: rebill*(1+mk), custExpBase: rebill, expLines, markup: mk, kmCust, fixedMob, custDiet, custDietDays, custTotal: rebill*(1+mk) + kmCust + custDiet};
@@ -930,10 +985,10 @@ function periodSum(from, to, contractId, who){
   Object.entries(byDate).forEach(([date, arr]) => {
     const byC = {}; arr.forEach(e => { const k = (e.contractId || "-") + "|" + whoOf(e); (byC[k] = byC[k] || []).push(e); });
     Object.entries(byC).forEach(([ck, es]) => {
-      const [cid, w] = ck.split("|"), c = contractById(cid), r = customerCalc(date, c, es, tourOrdBefore(date, w));
+      const [cid, w] = ck.split("|"), c = contractById(cid), r = customerCalc(date, c, es, tourOrdBefore(date, w), tourDaysBefore(date, w));
       const key = c ? cid : "-";
       const acc = cust[key] = cust[key] || {contract:c, items:{}, total:0, days:[], persons:{}};
-      r.items.forEach(it => { const k = w + "|" + it.code + "|" + it.rate; const x = acc.items[k] = acc.items[k] || {label:pre(w) + it.label, unit:it.unit, rate:it.rate, qty:0, amount:0, who:w}; x.qty += it.qty; x.amount += it.amount; });
+      r.items.forEach(it => { const k = w + "|" + it.code + "|" + it.rate; const x = acc.items[k] = acc.items[k] || {label:pre(w) + it.label, unit:it.unit, rate:it.rate, qty:0, amount:0, who:w, g:it.code + "|" + it.rate, gl:it.label}; x.qty += it.qty; x.amount += it.amount; });
       acc.total += r.total; acc.persons[w] = (acc.persons[w] || 0) + r.total; acc.days.push({date, who:w, entries:es, total:r.total});
     });
     const byW = {}; arr.forEach(e => (byW[whoOf(e)] = byW[whoOf(e)] || []).push(e));
@@ -954,9 +1009,9 @@ function periodSum(from, to, contractId, who){
     const acc = cust[key] = cust[key] || {contract:contractById(t.contractId), items:{}, total:0, days:[], persons:{}};
     let tsum = 0;
     m.expLines.forEach((x, i) => { const k = "utlegg|" + t.id + "|" + i, amt = x.base*(1 + m.markup);
-      acc.items[k] = {label:`${pre(w)}${x.text} ${x.date ? fmtDate(x.date) : ""} (kost ${kr(x.base)}${m.markup ? ` + ${hr(m.markup*100)} % påslag` : ""})`, unit:"stk", rate:amt, qty:1, amount:amt, who:w}; acc.total += amt; tsum += amt; });
-    if (m.custDiet > 0){ const k = "diett|" + t.id; acc.items[k] = {label:`${pre(w)}Diett ${t.title||""} (statens satser)`, unit:"døgn", rate:m.custDiet/m.custDietDays, qty:m.custDietDays, amount:m.custDiet, who:w}; acc.total += m.custDiet; tsum += m.custDiet; }
-    if (m.kmCust > 0){ const k = "km|" + t.id; acc.items[k] = {label:`${pre(w)}Kilometergodtgjørelse ${t.title||""}`, unit:"km", rate:m.kmCust/m.km, qty:m.km, amount:m.kmCust, who:w}; acc.total += m.kmCust; tsum += m.kmCust; }
+      acc.items[k] = {label:`${pre(w)}${x.text} ${x.date ? fmtDate(x.date) : ""} (kost ${kr(x.base)}${m.markup ? ` + ${hr(m.markup*100)} % påslag` : ""})`, unit:"stk", rate:amt, qty:1, amount:amt, who:w, g:"utlegg|" + (x.kind || "annet"), gl:`Utlegg – ${(EXP_TYPE[x.kind] || "Annet").toLowerCase()}${m.markup ? ` (inkl. ${hr(m.markup*100)} % påslag)` : ""}`}; acc.total += amt; tsum += amt; });
+    if (m.custDiet > 0){ const k = "diett|" + t.id; acc.items[k] = {label:`${pre(w)}Diett ${t.title||""} (statens satser)`, unit:"døgn", rate:m.custDiet/m.custDietDays, qty:m.custDietDays, amount:m.custDiet, who:w, g:"diett", gl:"Diett"}; acc.total += m.custDiet; tsum += m.custDiet; }
+    if (m.kmCust > 0){ const k = "km|" + t.id; acc.items[k] = {label:`${pre(w)}Kilometergodtgjørelse ${t.title||""}`, unit:"km", rate:m.kmCust/m.km, qty:m.km, amount:m.kmCust, who:w, g:"km", gl:"Kilometergodtgjørelse"}; acc.total += m.kmCust; tsum += m.kmCust; }
     acc.persons[w] = (acc.persons[w] || 0) + tsum;
   });
   Object.values(hires).forEach(H => { H.invoice = H.total + H.tm.toEmployee; });
@@ -1187,12 +1242,15 @@ function mProjBar(d, es, c0){
 }
 /* Fastpris mob./demob.: reisetid ført uten mob. gir ingen mob.-faktura. */
 /* Antall dager med mob./demob. per prosjekt og person (vanligvis 2: ut og hjem). Flere gir varsel. */
-const isMobEntry = e => num(e.mob) > 0 || (e.lines||[]).some(l => l.type === "mob" && lineHours(l) > 0);
+// Mob./demob. teller bare når dagen faktisk har en mob.-linje (onshore fastpris: også reise). Feltet «mob» er antall veier den dagen.
+const hasMobLine = e => { const c = contractById(e.contractId), fx = fxOn(c); return (e.lines||[]).some(l => (l.type === "mob" || (fx && l.type === "reise")) && lineHours(l) > 0); };
+const isMobEntry = e => hasMobLine(e);
 const mobDays = (cid, who) => new Set(Object.values(S.entries).filter(e => e.contractId === cid && whoOf(e) === who && isMobEntry(e)).map(e => e.date)).size;
 const mobExtraPill = e => { if (!e || !e.contractId || !isMobEntry(e)) return ""; const c = contractById(e.contractId); if (!c || mobModeOf(c) !== "fixed") return ""; const n = mobDays(e.contractId, whoOf(e));
   return n > 2 ? `<span class="pill bad" title="${n} dager med mob./demob. på dette prosjektet for ${esc(personName(whoOf(e)) || "personen")}. Vanligvis 2 (ut og hjem). Kontroller at Utreise/Hjemreise ikke er trykket ved en feil.">${n} mob. – kontroller</span>` : ""; };
+// Offshore fastpris: reisetid uten mob. faktureres ikke – varsle. Onshore teller reisedagen som mob./demob. (v26.4).
 const mobMissing = es => { const c = es[0] && contractById(es[0].contractId);
-  return !!c && mobModeOf(c) === "fixed" && es.some(e => (e.lines||[]).some(l => l.type === "reise" && lineHours(l) > 0)) && !es.some(e => num(e.mob) > 0 || (e.lines||[]).some(l => l.type === "mob" && lineHours(l) > 0)); };
+  return !!c && mobModeOf(c) === "fixed" && !fxOn(c) && es.some(e => (e.lines||[]).some(l => l.type === "reise" && lineHours(l) > 0)) && !es.some(e => (e.lines||[]).some(l => l.type === "mob" && lineHours(l) > 0)); };
 /* Mobil (administrator): hvem det føres for. Ikke i kNm Timer. */
 function mWhoBar(){
   if (FIELD || personIds().length < 2) return "";
@@ -1227,20 +1285,20 @@ function vIdag(){
     <div class="row spread" style="padding-top:6px"><span>${[...new Set(es.map(e => e.dayType))].map(pillType).join(" ")}</span><button class="btn sm" data-a="editEntry" data-id="${esc(es[0].id)}">Endre detaljer</button></div>
   </section>` : ""}`;
 }
-const qWorkChips = on => (on ? Object.values(WORKDAY).map(([a,b]) => [a,b,30]) : [["07:00","19:00",0],["19:00","07:00",0],["06:00","18:00",0]])
+const qWorkChips = (on, lu = 30) => (on ? Object.values(WORKDAY).map(([a,b]) => [a,b,lu]) : [["07:00","19:00",0],["19:00","07:00",0],["06:00","18:00",0]])
   .map(([a,b,pz]) => `<button class="chip" data-a="qPreset" data-s="${a}" data-e="${b}" data-p="${pz}">${on ? a + "–" + b : a.slice(0,2) + "–" + b.slice(0,2)}</button>`).join("");
 function qLineSheet(type){
   const d = S.day, es = entriesOn(d), df = defaultsFor(d);
   editing = {kind:"qline", type};
-  const on = (es.length ? es[0].dayType : df.dayType) === "felt", wd = workDayOf(contractById(df.contractId));
-  const chips = type === "arbeid" ? qWorkChips(on) : [1,2,3,4,6,8,12].map(h => `<button class="chip" data-a="qHours" data-h="${h}">${h} t</button>`).join("");
+  const on = (es.length ? es[0].dayType : df.dayType) === "felt", wd = workDayOf(contractById(df.contractId)), lc = contractById(es.length ? es[0].contractId : df.contractId), lu = lunchMin(lc, "felt");
+  const chips = type === "arbeid" ? qWorkChips(on, lu) : [1,2,3,4,6,8,12].map(h => `<button class="chip" data-a="qHours" data-h="${h}">${h} t</button>`).join("");
   openSheet(`
     <div class="row spread"><h2>${TYPE_LABEL[type]} · ${fmtDate(d)}</h2><button class="btn ghost" data-a="close">Lukk</button></div>
     <div class="chips">${chips}</div>
     <div class="fgrid big">
       <label class="field"><span>Fra</span>${tsel('id="qS"', type === "arbeid" ? (on ? wd[0] : "07:00") : "")}</label>
       <label class="field"><span>Til</span>${tsel('id="qE"', type === "arbeid" ? (on ? wd[1] : "19:00") : "")}</label>
-      ${type === "arbeid" ? `<label class="field"><span>Pause min</span><input type="number" id="qP" min="0" step="15" value="${on ? 30 : 0}" inputmode="numeric"></label>` : `<label class="field"><span>eller timer</span><input type="number" id="qH" min="0" step="0.25" inputmode="decimal"></label>`}
+      ${type === "arbeid" ? `<label class="field"><span>Pause min</span><input type="number" id="qP" min="0" step="15" value="${on ? lu : 0}" inputmode="numeric"></label>` : `<label class="field"><span>eller timer</span><input type="number" id="qH" min="0" step="0.25" inputmode="decimal"></label>`}
     </div>
     <div class="qsum" id="qSum" aria-live="polite"></div>
     ${es.length ? `<p class="small muted">Legges til dagens føring: ${esc((contractById(es[0].contractId)||{}).name || "uten prosjekt")}${ordPoText(contractById(es[0].contractId)) ? " · " + esc(ordPoText(contractById(es[0].contractId))) : ""}.</p>` : `
@@ -1251,7 +1309,7 @@ function qLineSheet(type){
   ["#qS","#qE","#qP","#qH"].forEach(s => { const el = $(s); if (el) el.addEventListener("input", qUpd); });
   // Bytter Type dag: onshore får kundens arbeidstid og 30 min pause, offshore 12-timersskift uten pause
   if (type === "arbeid" && $("#qT")) $("#qT").addEventListener("change", () => { const on2 = $("#qT").value === "felt", w2 = workDayOf(contractById(df.contractId));
-    $("#sheetHost .chips").innerHTML = qWorkChips(on2); $("#qS").value = on2 ? w2[0] : "07:00"; $("#qE").value = on2 ? w2[1] : "19:00"; $("#qP").value = on2 ? 30 : 0; qUpd(); });
+    $("#sheetHost .chips").innerHTML = qWorkChips(on2, lu); $("#qS").value = on2 ? w2[0] : "07:00"; $("#qE").value = on2 ? w2[1] : "19:00"; $("#qP").value = on2 ? lu : 0; qUpd(); });
   qUpd();
 }
 function qRead(){
@@ -1277,10 +1335,10 @@ function qExpSheet(tid){
     <label class="field"><span>Hva</span><input id="qXD" placeholder="Taxi, parkering, mat på flyplass …"></label>
     <label class="field"><span>Reise</span><select id="qXT">${list.map(t => `<option value="${esc(t.id)}"${t.id === def ? " selected" : ""}>${esc(t.title || t.destination || "Reise")}${whoOf(t) ? " – " + esc(personName(whoOf(t))) : ""} · ${t.start ? fmtDateY(t.start.slice(0,10)) : ""}</option>`).join("")}</select></label>
     <div class="row"><label class="check emp"><input type="checkbox" id="qXF"> Betalt av firma (ingen refusjon)</label><label class="check cust"><input type="checkbox" id="qXR" checked> Kunde: viderefaktureres</label></div>
-    ${S.assets ? `<label class="photoBtn" id="qXPl">Ta bilde av kvittering<input type="file" id="qXP" accept="image/*,application/pdf" capture="environment" hidden></label><div id="qXPs" class="small muted"></div>` : `<p class="small muted">Kvitteringsbilde kan legges ved når siden er åpnet fra claude.ai.</p>`}
+    ${S.assets ? `<div class="photoRow"><label class="photoBtn" id="qXPl">Ta bilde<input type="file" id="qXP" accept="image/*" capture="environment" hidden></label><label class="photoBtn">Last opp bilde eller PDF<input type="file" id="qXP2" accept="image/*,application/pdf" hidden></label></div><div id="qXPs" class="small muted"></div>` : `<p class="small muted">Kvitteringsbilde kan legges ved når siden er åpnet fra claude.ai.</p>`}
     <button class="btn pri big" data-a="qExpSave">Lagre utlegg</button>
     ${S.assets ? `<label class="btn">Flere kvitteringer på en gang<input type="file" id="bulkRc" multiple accept="image/*,application/pdf" hidden></label><p class="small muted" style="margin:0">Én linje per kvittering, lagt på reisen som dekker datoen. PDF-er leses automatisk.</p>` : ""}`);
-  const fi = $("#qXP");
+  ["#qXP", "#qXP2"].forEach(sel => { const fi = $(sel);
   if (fi) fi.addEventListener("change", async () => {
     const f = fi.files && fi.files[0]; if (!f) return;
     editing.uploading = true; $("#qXPs").textContent = aiReceiptOk() ? "Leser kvitteringen …" : "Skanner og laster opp …";
@@ -1292,7 +1350,7 @@ function qExpSheet(tid){
       else { const r = await uploadReceipt(f); if (editing && editing.kind === "qexp"){ editing.receipt = r.id; editing.receiptUrl = r.url; $("#qXPs").innerHTML = `<img class="thumb" src="${esc(r.url)}" alt="Kvittering"> ${FIELD ? "Kvittering lagt ved. Skriv inn beløpet." : "Kvittering lagt ved. <b>Beløpet ble ikke lest</b> – Claude er ikke tilgjengelig i denne visningen. Fyll inn beløpet."}`; } } }
     catch(e){ $("#qXPs").textContent = receiptErr(e); }
     finally{ if (editing) editing.uploading = false; }
-  });
+  }); });
 }
 
 /* ============ Mobil: Uke, Reise, Mer ============ */
@@ -1366,7 +1424,7 @@ function applyRow(e, row){
   e.lines = e.lines || [];
   if (!inlineView(e).simple) return;
   let a = e.lines.find(l => l.type === "arbeid");
-  if (row.start || row.end){ if (!a){ a = {type:"arbeid"}; e.lines.unshift(a); } a.start = row.start; a.end = row.end; if (row.pause !== undefined) a.pause = num(row.pause); else if (a.pause === undefined) a.pause = 0; delete a.hours; }
+  if (row.start || row.end){ if (!a){ a = {type:"arbeid"}; e.lines.unshift(a); } a.start = row.start; a.end = row.end; if (row.pause !== undefined) a.pause = num(row.pause); else if (a.pause === undefined) a.pause = lunchMin(contractById(row.contractId), row.dayType); delete a.hours; }
   else if (a) e.lines = e.lines.filter(l => l !== a);
   { /* Reise/mob. i én kolonne: offshoredag = mob./demob., ellers reise */
     const tp = row.dayType === "offshore" ? "mob" : "reise"; let l = e.lines.find(x => x.type === "mob" || x.type === "reise");
@@ -1473,7 +1531,7 @@ function vUkeDesk(){
       const locked = isLocked(d, e ? e.contractId : df.contractId);
       const dis = locked ? " disabled title=\"Signert og låst\"" : iv.simple ? "" : " disabled title=\"Flere linjer – bruk ⋯ for detaljer\"";
       const key = `${d}-${idx}`, id = f => `id="w-${key}-${f}" data-w="${key}" data-f="${f}"${locked && /contractId|dayType|ref/.test(f) ? " disabled" : ""}`;
-      const cu = e ? customerCalc(d, contractById(e.contractId), [e], tourOrdBefore(d, whoOf(e))) : {total:0};
+      const cu = e ? customerCalc(d, contractById(e.contractId), [e], tourOrdBefore(d, whoOf(e)), tourDaysBefore(d, whoOf(e))) : {total:0};
       custSum += cu.total;
       const tot = e ? entryHours(e) : 0;
       rows += `<tr class="${idx === 0 ? "first" : ""} ${e && e.dayType === "offshore" ? "off" : ""} ${kind !== "hverdag" ? "we" : ""} ${hol ? "hol" : ""} ${d === t ? "today" : ""}">
@@ -1521,7 +1579,7 @@ function vUkeDesk(){
 
 /* ============ Mobil: utreise / hjemreise ============ */
 function travelSheet(kind){
-  const d = S.day, es = entriesOn(d), df = defaultsFor(d), out = kind === "ut";
+  const d = S.day, es = entriesOn(d), df = defaultsFor(d), out = kind === "ut", tlu = lunchMin(contractById(es.length ? es[0].contractId : df.contractId), es.length ? es[0].dayType : df.dayType);
   editing = {kind:"travel", dir:kind};
   openSheet(`
     <div class="row spread"><h2>${out ? "Utreise" : "Hjemreise"} · ${fmtDate(d)}</h2><button class="btn ghost" data-a="close">Lukk</button></div>
@@ -1533,7 +1591,7 @@ function travelSheet(kind){
       : `<label class="field"><span>Arbeid start (tom = ingen arbeid)</span>${tsel('id="tvA"', "07:00")}</label>
       <label class="field"><span>Dro fra jobb</span>${tsel('id="tvB"', "12:00")}</label>
       <label class="field"><span>Hjemme</span>${tsel('id="tvC"', "17:00")}</label>`}
-      <label class="field"><span>Pause i arbeid, min</span><input type="number" id="tvP" min="0" step="15" value="0" inputmode="numeric"></label>
+      <label class="field"><span>Pause i arbeid, min</span><input type="number" id="tvP" min="0" step="15" value="${tlu}" inputmode="numeric"></label>
     </div>
     <div class="qsum" id="tvSum" aria-live="polite" style="font-size:1.35rem"></div>
     ${es.length ? `<p class="small muted">Legges til dagens føring: ${esc((contractById(es[0].contractId)||{}).name || "uten prosjekt")}${ordPoText(contractById(es[0].contractId)) ? " · " + esc(ordPoText(contractById(es[0].contractId))) : ""}.</p>` : `
@@ -1617,22 +1675,29 @@ function buildPdfDoc({from, to, contractId, amounts, approval, who}){
     y += 44; pdf.rect(M, y, R - M, 2, GREEN); y += 14;
     if (!first) return;
     const meta = [["Kunde", c ? c.customer || "–" : "Flere kontrakter"], ["Kontrakt / prosjekt", c ? c.name : "Alle"], [ordPoLabel(c), ordPo(c)],
-                  all ? ["Personell", [...new Set(list.map(whoOf))].map(personName).join(", ") || "–"] : isHire(who) ? ["Navn", personName(who) + (((S.settings.hires||[]).find(h => h.id === who) || {}).company ? " · " + (S.settings.hires||[]).find(h => h.id === who).company : "")] : ["Navn", personName(who) || "–"], all || isHire(who) ? ["", ""] : ["Ansattnr.", empNoOf(who) || "–"], ["Utskrevet", fmtDateY(todayStr())]];
+                  all ? ["Utskrevet", fmtDateY(todayStr())] : isHire(who) ? ["Navn", personName(who) + (((S.settings.hires||[]).find(h => h.id === who) || {}).company ? " · " + (S.settings.hires||[]).find(h => h.id === who).company : "")] : ["Navn", personName(who) || "–"], all || isHire(who) ? ["", ""] : ["Ansattnr.", empNoOf(who) || "–"], all ? ["", ""] : ["Utskrevet", fmtDateY(todayStr())]];
     meta.forEach((m,i) => { const cx = M + (i % 3) * ((R - M)/3), cy = y + Math.floor(i/3) * 26;
       pdf.text(cx, cy + 7, m[0].toUpperCase(), {size:6.5, bold:true, color:MUTED}); pdf.text(cx, cy + 18, pdf.fit(m[1], 9.5, true, (R-M)/3 - 8), {size:9.5, bold:true}); });
-    y += 74;
+    if (all){ // Personell over hele bredden, brytes over flere linjer
+      const names = [...new Set(list.map(whoOf))].map(personName), lines = []; let cur = "";
+      names.forEach((n, i) => { const nx = cur ? cur + ", " + n : n; if (cur && pdf.tw(nx + (i < names.length - 1 ? "," : ""), 9.5, true) > R - M - 8){ lines.push(cur + ","); cur = n; } else cur = nx; });
+      if (cur || !lines.length) lines.push(cur || "–");
+      const py = y + 52; pdf.text(M, py + 7, "PERSONELL", {size:6.5, bold:true, color:MUTED});
+      lines.forEach((l, i) => pdf.text(M, py + 18 + i * 12, l, {size:9.5, bold:true}));
+      y += 52 + 18 + (lines.length - 1) * 12 + 40;
+    } else y += 74;
   };
   const cols = all
-    ? (multi ? [["Dato",48],["Dag",22],["Person",64],["Kontrakt",64],["Type",36],["Ordre / sted",50],["Fra–til",58],["Arbeid",38,1],["Reise/mob.",50,1],["Standby",40,1],["Sum t",38,1]]
-             : [["Dato",50],["Dag",26],["Person",84],["Type",40],["Ordre / sted",78],["Arbeid fra–til",66],["Arbeid",40,1],["Reise/mob.",56,1],["Standby",44,1],["Sum t",38,1]])
+    ? (multi ? [["Dato",48],["Dag",26],["Person",70],["Kontrakt",62],["Type",42],["Ordre / sted",0],["Fra–til",60],["Ordinær",40,1],["Overtid",38,1],["Reise/mob.",52,1],["Standby",42,1],["Sum t",36,1]]
+             : [["Dato",50],["Dag",26],["Person",72],["Type",40],["Ordre / sted",52],["Arbeid fra–til",66],["Ordinær",42,1],["Overtid",40,1],["Reise/mob.",54,1],["Standby",42,1],["Sum t",38,1]])
     : multi
-    ? [["Dato",50],["Dag",24],["Kontrakt",80],["Type",40],["Ordre / sted",64],["Arbeid fra–til",74],["Arbeid",40,1],["Reise/mob.",56,1],["Standby",44,1],["Sum t",40,1]]
-    : [["Dato",50],["Dag",30],["Type",44],["Ordre / sted",110],["Arbeid fra–til",80],["Arbeid",40,1],["Reise/mob.",60,1],["Standby",44,1],["Sum t",40,1]];
-  // Fakturagrunnlag med fastpris mob./demob.: reisetimer faktureres ikke og vises ikke
+    ? [["Dato",50],["Dag",24],["Kontrakt",70],["Type",40],["Ordre / sted",36],["Arbeid fra–til",74],["Ordinær",42,1],["Overtid",40,1],["Reise/mob.",56,1],["Standby",44,1],["Sum t",40,1]]
+    : [["Dato",50],["Dag",30],["Type",44],["Ordre / sted",70],["Arbeid fra–til",80],["Ordinær",42,1],["Overtid",40,1],["Reise/mob.",60,1],["Standby",44,1],["Sum t",40,1]];
+  // Fastpris mob./demob.: reisetimer faktureres ikke og vises ikke (verken fakturagrunnlag eller timeliste – lønn/avregning har egne PDF-er)
   // Fakturagrunnlag: «Ordre / sted» vises ikke
-  const noMob = !!(amounts && c && mobModeOf(c) === "fixed"), ri = cols.findIndex(x => x[0] === "Reise/mob."), oi = cols.findIndex(x => x[0] === "Ordre / sted");
-  const drop = [noMob ? ri : -1, amounts ? oi : -1].filter(i => i >= 0).sort((a, b) => b - a);
-  if (drop.length){ const gain = drop.reduce((a, i) => a + cols[i][1], 0), ti = cols.findIndex(x => x[0] === "Type"); cols[ti] = [cols[ti][0], cols[ti][1] + gain]; drop.forEach(i => cols.splice(i, 1)); }
+  const noMob = !!(c && mobModeOf(c) === "fixed"), ri = cols.findIndex(x => x[0] === "Reise/mob."), oi = cols.findIndex(x => x[0] === "Ordre / sted");
+  const drop = [noMob ? ri : -1, amounts || (all && multi) ? oi : -1].filter(i => i >= 0).sort((a, b) => b - a);
+  if (drop.length){ const gain = drop.reduce((a, i) => a + cols[i][1], 0), ti = cols.findIndex(x => x[0] === "Type"), pi = cols.findIndex(x => x[0] === "Person"), g1 = pi >= 0 ? Math.round(gain / 2) : 0; cols[ti] = [cols[ti][0], cols[ti][1] + gain - g1]; if (pi >= 0) cols[pi] = [cols[pi][0], cols[pi][1] + g1]; drop.forEach(i => cols.splice(i, 1)); }
   const cut = v => { drop.forEach(i => v.splice(i, 1)); return v; };
   const thead = () => { pdf.rect(M, y, R - M, 16, SOFT); let x = M + 4; cols.forEach(([l,w,r]) => { pdf.text(r ? x + w - 8 : x, y + 11, l, {size:7.5, bold:true, align: r ? "right" : "left"}); x += w; }); y += 16; };
   const row = (vals, opt = {}) => {
@@ -1642,23 +1707,44 @@ function buildPdfDoc({from, to, contractId, amounts, approval, who}){
     y += 14; pdf.line(M, y, R, y, LINE, 0.4);
   };
   head(true);
+  if (amounts){ // Oppsummering: alle personer samlet per post
+    const ps0 = periodSum(from, to, contractId, who), G = {}, ord = [];
+    Object.values(ps0.cust).forEach(acc => Object.values(acc.items).forEach(it => { const k = it.g || it.label; if (!G[k]){ G[k] = {label: it.gl || it.label, unit: it.unit, qty:0, amount:0, rates:new Set()}; ord.push(k); } const g = G[k]; g.qty += it.qty; g.amount += it.amount; g.rates.add(Math.round(it.rate * 100)); }));
+    const rank = k => k.startsWith("utlegg") ? 5 : k === "km" ? 4 : k === "diett" ? 3 : /^(mob|reise)\|/.test(k) ? 2 : 1;
+    const keys = ord.slice().sort((a, b) => rank(a) - rank(b)), tot = keys.reduce((a, k) => a + G[k].amount, 0);
+    if (keys.length){
+      pdf.text(M, y, "Oppsummering", {size:11, bold:true}); y += 8;
+      const cw = [["Post", 250], ["Antall", 60, 1], ["Enhet", 50], ["Sats", 70, 1], ["Beløp", 93, 1]];
+      pdf.rect(M, y, R - M, 16, SOFT); let x = M + 4; cw.forEach(([l, w2, r]) => { pdf.text(r ? x + w2 - 8 : x, y + 11, l, {size:7.5, bold:true, align: r ? "right" : "left"}); x += w2; }); y += 16;
+      keys.forEach(k => { const g = G[k], one = g.rates.size === 1; let x = M + 4;
+        [g.label, g.unit === "stk" && k.startsWith("utlegg") ? String(g.qty) : hr(g.qty), g.unit, one && !k.startsWith("utlegg") ? kr([...g.rates][0] / 100) : "", kr(g.amount)].forEach((v, i) => { const [, w2, r] = cw[i]; pdf.text(r ? x + w2 - 8 : x, y + 10, pdf.fit(v, 8, false, w2 - 8), {size:8, align: r ? "right" : "left"}); x += w2; });
+        y += 14; pdf.line(M, y, R, y, LINE, 0.4); });
+      pdf.rect(M, y, R - M, 16, "#f4f6f1"); pdf.text(M + 4, y + 11, "Sum eks. mva", {size:8.5, bold:true}); pdf.text(R - 8, y + 11, kr(tot) + " kr", {size:8.5, bold:true, align:"right"}); y += 46;
+    }
+  }
   pdf.text(M, y, "Timer", {size:11, bold:true}); y += 8;
   thead();
-  const tot = {a:0, m:0, r:0, s:0};
+  const tot = {a:0, m:0, r:0, s:0, o:0, ot:0};
+  // Ordinær/overtid etter kontraktens regler (samme som fakturaen): terskel, helg onshore, langt opphold, overtid utover dagrate
+  const ordOt = e => { const t = entryTotals(e), cc = contractById(e.contractId); if (!cc) return {o:t.arbeid, ot:0};
+    const cu = customerCalc(e.date, cc, [e], tourOrdBefore(e.date, whoOf(e)), tourDaysBefore(e.date, whoOf(e))), ot = Math.min(t.arbeid, cu.items.filter(it => ["ot","holot","dagls"].includes(it.code)).reduce((a, it) => a + it.qty, 0));
+    return {o: Math.max(0, t.arbeid - ot), ot}; };
   if (!list.length){ pdf.text(M + 4, y + 10, "Ingen føringer i perioden", {size:8, color:MUTED}); y += 14; pdf.line(M, y, R, y, LINE, 0.4); }
   list.forEach(e => {
     const t = entryTotals(e), k = dayKind(e.date, contractById(e.contractId)), hol = holidayName(e.date);
-    const times = (e.lines||[]).filter(l => l.type === "arbeid" && l.start && l.end).map(l => `${l.start}–${l.end}`).join(", ");
-    tot.a += t.arbeid; tot.m += t.mob; tot.r += t.reise; tot.s += t.standby;
-    const f = n => n ? hr(n) : "";
+    const fixTrav = noMob && t.mob + t.reise > 0, trv = (e.lines||[]).filter(l => (l.type === "mob" || l.type === "reise") && l.start && l.end).map(l => `${l.start}–${l.end}`).join(", ");
+    const times = (e.lines||[]).filter(l => l.type === "arbeid" && l.start && l.end).map(l => `${l.start}–${l.end}`).join(", ") || (fixTrav ? trv : "");
+    const oo = ordOt(e);
+    tot.a += t.arbeid; tot.m += t.mob; tot.r += t.reise; tot.s += t.standby; tot.o += oo.o; tot.ot += oo.ot;
+    const f = n => n ? hr(n) : "", sumT = noMob ? t.arbeid + t.standby : entryHours(e);
     const v = [fmtDateY(e.date), DOW[D(e.date).getUTCDay()]].concat(all ? [personName(whoOf(e))] : []).concat(multi ? [(contractById(e.contractId)||{}).name || "–"] : [])
-      .concat([DT_SHORT[e.dayType] || e.dayType, [e.ref, e.location].filter(Boolean).join(" · ") || (hol || ""), times, f(t.arbeid), f(t.mob + t.reise), f(t.standby), hr(noMob ? t.arbeid + t.standby : entryHours(e))]);
+      .concat([fixTrav && !t.arbeid ? "Mob./demob." : (DT_SHORT[e.dayType] || e.dayType), [e.ref, e.location].filter(Boolean).join(" · ") || (hol || ""), times, f(oo.o), f(oo.ot), f(t.mob + t.reise), f(t.standby), sumT || !fixTrav ? hr(sumT) : ""]);
     row(cut(v), {fill: hol ? "#f9e1de" : k !== "hverdag" ? "#eef2ea" : null});
   });
   const pad = (multi ? 6 : 5) + (all ? 1 : 0);
-  row(cut(["Sum"].concat(Array(pad - 1).fill("")).concat([hr(tot.a), hr(tot.m + tot.r), hr(tot.s), hr(tot.a + tot.s + (noMob ? 0 : tot.m + tot.r))])), {bold:true, fill:"#f4f6f1"});
+  row(cut(["Sum"].concat(Array(pad - 1).fill("")).concat([hr(tot.o), hr(tot.ot), hr(tot.m + tot.r), hr(tot.s), hr(tot.a + tot.s + (noMob ? 0 : tot.m + tot.r))])), {bold:true, fill:"#f4f6f1"});
   y += 6;
-  pdf.text(M, y + 8, noMob ? "Rød rad = helligdag · grå rad = helg. Arbeid = arbeid offshore/land. Mob./demob. er fastpris og vises ikke som timer." : "Rød rad = helligdag · grå rad = helg. Arbeid = arbeid offshore/land. Reise/mob. = reisetid og mobilisering/demobilisering.", {size:7, color:MUTED}); y += 18;
+  pdf.text(M, y + 8, noMob ? "Rød rad = helligdag · grå rad = helg. Ordinær/overtid etter kontraktens regler. Mob./demob. er fastpris og vises ikke som timer." : "Rød rad = helligdag · grå rad = helg. Ordinær/overtid etter kontraktens regler. Reise/mob. = reisetid og mobilisering/demobilisering.", {size:7, color:MUTED}); y += 18;
   if (amounts){
     const ps = periodSum(from, to, contractId, who);
     Object.values(ps.cust).forEach(acc => {
@@ -1859,9 +1945,9 @@ function exportBar(from, to, cid, who){
   if (who === undefined) who = S.who || "";
   const w = `data-w="${esc(who)}"`;
   return `<div class="row">${cid ? `<button class="btn sm" data-a="signOpen" data-c="${esc(cid)}" data-f="${from}" data-t="${to}">Signer</button>` : ""}
-    <button class="btn sm" data-a="xPdf" data-k="timeliste" data-c="${esc(cid||"")}" data-f="${from}" data-t="${to}" ${w}>PDF timeliste</button>
+    <button class="btn sm" data-a="xPdf" data-k="timeliste" data-c="${esc(cid||"")}" data-f="${from}" data-t="${to}" ${w}>PDF timeliste kunde</button>
     <button class="btn sm btnCust" data-a="xPdf" data-k="faktura" data-c="${esc(cid||"")}" data-f="${from}" data-t="${to}" ${w}>PDF fakturagrunnlag</button>
-    ${who !== "*" ? `<button class="btn sm" data-a="pdfPay" data-c="${esc(cid||"")}" data-f="${from}" data-t="${to}" ${w}>${isHire(who) ? "PDF avregning innleid" : "PDF lønnsgrunnlag"}</button>` : ""}
+    ${who !== "*" ? `<button class="btn sm" data-a="pdfPay" data-c="${esc(cid||"")}" data-f="${from}" data-t="${to}" ${w}>${isHire(who) ? "PDF avregning + timeliste" : "PDF lønnsgrunnlag + timeliste"}</button>` : ""}
     <button class="btn sm" data-a="xXlsx" data-c="${esc(cid||"")}" data-f="${from}" data-t="${to}" ${w}>Excel</button></div>`;
 }
 
@@ -1917,13 +2003,13 @@ function planCalc(c){
   const dCache = {}, rowD = r => { const f0 = r.fromDate && (!c.startDate || r.fromDate >= c.startDate) ? r.fromDate : c.startDate, t0 = r.toDate && (!c.endDate || r.toDate <= c.endDate) ? r.toDate : c.endDate, k = (f0 || "") + "|" + (t0 || "");
     return dCache[k] || (dCache[k] = planDays(Object.assign({}, c, {startDate: f0 || "", endDate: t0 || ""}))); };
   const workEntry = d => ({date:d, dayType:type, lines:[{type:"arbeid", hours:H}], mob:0, hotbed: off && !!c.hotbedDefault});
-  const cwCache = {}, custWorkOf = Dr => { const k = Dr.from + "|" + Dr.to + "|" + Dr.work.length; if (cwCache[k] === undefined){ let ob = 0, t = 0; Dr.work.forEach(d => { t += customerCalc(d, c, [workEntry(d)], off ? ob : null).total; if (off) ob += Math.min(H, thrC); }); cwCache[k] = t; } return cwCache[k]; };
+  const cwCache = {}, custWorkOf = Dr => { const k = Dr.from + "|" + Dr.to + "|" + Dr.work.length; if (cwCache[k] === undefined){ let ob = 0, nd = 0, t = 0; Dr.work.forEach(d => { t += customerCalc(d, c, [workEntry(d)], off ? ob : null, off ? nd : undefined).total; if (off){ ob += Math.min(H, thrC); nd++; } }); cwCache[k] = t; } return cwCache[k]; };
   // Lønnskost per ansatt (egen månedslønn); felles lønnsregler
   const ecCache = {}, empCost = (w, Dr) => { const k = w + "|" + Dr.from + "|" + Dr.to; return ecCache[k] !== undefined ? ecCache[k] : (ecCache[k] = withEmp(w, () => { let pw = 0, o2 = 0;
     Dr.work.forEach(d => { pw += payCalc(d, [workEntry(d)], off ? o2 : null).total; if (off) o2 += Math.min(H, thrC); });
     const ts2 = hourlyRate(); return {payWork: pw, fastDay: num(S.settings.pay.monthly) * 12 / 260, trR: num(S.settings.pay.travelRate) || ts2}; })); };
   const fixed = mobModeOf(c) === "fixed", mk = num(c.markup)/100;
-  const dietBill = !fixed && (c.dietBill || "auto") !== "none", kmBill = !fixed && (c.kmBill || "auto") !== "none";
+  const dietBill = (!fixed || !off) && (c.dietBill || "auto") !== "none", kmBill = kmBilled(c);
   const kmCust = num(c.kmRate) || num(st.km), dietCust = num(c.dietRate) || num(st.dietNight);
   const cu = {work:0, standby:0, mob:0, diet:0, km:0, exp:0}, co = {fast:0, tillegg:0, mob:0, sos:0, hire:0, hireMob:0, diet:0, km:0, exp:0};
   const hwCache = {}, hireWork = (h, Dr) => { const k = h.id + "|" + Dr.from + "|" + Dr.to; if (hwCache[k] === undefined){ const hc = Object.assign({}, h, {ordThreshold: off ? (num(h.thrOff) || 12) : (num(h.thrOn) || 8), mobMode:"actual", dayRate:0, hotbedRate: num(h.hotbedRate)});
@@ -1956,7 +2042,7 @@ function planCalc(c){
     const nights = !rdays.length || daily ? 0 : off ? xd * trips : home ? Dr.blocks.reduce((a,b) => a + b - 1 + xd, 0) + stay.reduce((a,g) => a + g + 1 - xd, 0) : Math.max(0, Dr.cal.length - 1) + xd;
     const exp = (num(r.toll) + num(r.fare)) * trips + num(r.hotel) * nights + num(r.other);
     const rc = {work:custWorkOf(Dr), standby:sb*num(c.rStandby), mob: fixed ? legs*num(c.mobFee) : mobH*num(c.rReise),
-                diet: dietBill ? (num(c.dietRate) > 0 ? diet * num(c.dietRate) + pbN * dg12 : dOut) : 0, km: kmBill ? km*kmCust : 0, exp: fixed ? 0 : exp*(1 + mk)};
+                diet: dietBill ? (num(c.dietRate) > 0 ? diet * num(c.dietRate) + pbN * dg12 : dOut) : 0, km: kmBill ? km*kmCust : 0, exp: fixed ? (off ? 0 : num(r.hotel) * nights * (1 + mk)) : exp*(1 + mk)};
     const hire = r.hireId ? hireById(r.hireId) : null;
     let ro, aw = 0;
     if (hire){ // Innleid: kosten er fakturaen deres (timer etter deres satser). Ingen fastlønn eller sosiale kostnader.
@@ -2446,6 +2532,7 @@ function anbudDetail(c){
         <div class="fgrid al">${fld("startDate","Første arbeidsdag","", "date")}${fld("endDate","Siste arbeidsdag","", "date")}
           <label class="field"><span>Type jobb</span><select id="pf-planType" data-pf="planType"><option value="offshore"${off?" selected":""}>Offshore</option><option value="felt"${!off?" selected":""}>Onshore</option></select><small class="hint">Styrer uke, diett og hotell.</small></label>
           <label class="field" id="pf-workWrap"${off ? " hidden" : ""}><span>Arbeidstid</span><select id="pf-workDay" data-wd="1">${Object.entries(WORKDAY).map(([k,[a,b]]) => `<option value="${k}"${((c.workDay || "0700") === k) ? " selected" : ""}>${a}–${b}</option>`).join("")}</select><small class="hint">Kundens arbeidstid, 30 min pause (7,5 t).</small></label>
+          <label class="field" id="pf-lunchWrap"${off ? " hidden" : ""}><span>Betalt lunsj</span><select id="pf-paidLunch" data-lunch="1"><option value=""${!c.paidLunch ? " selected" : ""}>Nei</option><option value="1"${c.paidLunch ? " selected" : ""}>Ja</option></select><small class="hint">Nei: 30 min trekkes på nye onshore-føringer.</small></label>
           <label class="field"><span>Arbeidsuke</span><select id="pf-planWeek" data-pf="planWeek"${off ? " disabled" : ""}>${[[5,"5 dager (man–fre)"],[6,"6 dager (man–lør)"],[7,"7 dager (alle dager)"]].map(([k,l]) => `<option value="${k}"${wk === k ? " selected" : ""}>${l}</option>`).join("")}</select><small class="hint" id="pf-weekHint">${off ? "Offshore er alltid 7-dagers uke." : "Helligdager er fri i 5- og 6-dagers uke."}</small></label>
           <label class="field" id="pf-weekendWrap"${off || wk === 7 ? " hidden" : ""}><span>Hjem i helgene</span><select id="pf-planWeekend" data-pf="planWeekend"><option value="stay"${c.planWeekend !== "home" ? " selected" : ""}>Nei</option><option value="home"${c.planWeekend === "home" ? " selected" : ""}>Ja</option></select><small class="hint">Nei: diett og overnatting alle dager. Ja: turer per person.</small></label>
           ${fld("planHours","Arbeidstimer per dag","Uten reise. 12 offshore, 7,5 onshore.","number", off ? "12" : "7.5")}</div>
@@ -2461,7 +2548,7 @@ function anbudDetail(c){
   if (!lk) return html;
   // Låst: alle anbudsfelt låses (prosjektperioden er utenfor). Mannskapskort kan fortsatt minimeres.
   const i0 = html.indexOf('<div class="anbGrid'), head = html.slice(0, i0);
-  return head + html.slice(i0).replace(/<(input|select|textarea)(?![^>]*data-(?:pj|wd))/g, "<$1 disabled").replace(/<button class="btn sm" data-a="crewAdd">[^<]*<\/button>/, "").replace(/<button class="btn ghost sm" data-a="crewDel"[^>]*>[^<]*<\/button>/g, "").replace(/<button class="btn ghost sm cxDel"[^>]*>[^<]*<\/button>/g, "");
+  return head + html.slice(i0).replace(/<(input|select|textarea)(?![^>]*data-(?:pj|wd|lunch))/g, "<$1 disabled").replace(/<button class="btn sm" data-a="crewAdd">[^<]*<\/button>/, "").replace(/<button class="btn ghost sm" data-a="crewDel"[^>]*>[^<]*<\/button>/g, "").replace(/<button class="btn ghost sm cxDel"[^>]*>[^<]*<\/button>/g, "");
 }
 function anbudRead(){
   const c = clone(contractById(S.anbSel)); if (!c) return null;
@@ -2486,7 +2573,7 @@ function anbudLive(){
   if (ws){ if (off){ ws.disabled = true; ws.value = "7"; } else if (ws.disabled){ ws.disabled = false; ws.value = String(planWeekOf(c)); } }
   const wh = $("#pf-weekHint"); if (wh) wh.textContent = off ? "Offshore er alltid 7-dagers uke." : "Helligdager er fri i 5- og 6-dagers uke.";
   const ww = $("#pf-weekendWrap"); if (ww) ww.hidden = off || p.wk === 7;
-  const wkw = $("#pf-workWrap"); if (wkw) wkw.hidden = off;
+  const wkw = $("#pf-workWrap"); if (wkw) wkw.hidden = off; const lkw = $("#pf-lunchWrap"); if (lkw) lkw.hidden = off;
   const ph = $("#pf-planHours"); if (ph) ph.placeholder = off ? "12" : "7.5";
   const di = $("#pf-dayInfo"); if (di) di.textContent = p.c.startDate ? `${p.days} arbeidsdager av ${p.calDays} kalenderdager.` : "Sett første arbeidsdag – før det regnes ingenting.";
   p.rows.forEach(pr => { const s = $("#crs-" + pr.i); if (s) s.innerHTML = crewSum(pr); { const rr = crewRows(c)[pr.i] || {exps:[]}; let tt = 0; rr.exps.forEach((x, j) => { const e = document.querySelector(`[data-cxs="${pr.i}-${j}"]`); if (e) e.textContent = [EXP_UNIT[EXP_T[x.t][1]], expSumTxt(x.t, x.a, pr)].filter(Boolean).join(" · "); const u = EXP_T[x.t][1]; tt += num(x.a) * (u === "tur" ? pr.trips : u === "natt" ? pr.nights : 1); }); const te = document.querySelector(`[data-cxt="${pr.i}"]`); if (te) te.textContent = tt ? `Sum ${kr0(tt)} kr` : ""; } const d = $(`#pf-cr-${pr.i}-diet`); if (d) d.placeholder = "auto: " + pr.autoDiet;
@@ -2710,7 +2797,7 @@ function vOppsett(){
     <label class="btn sm">Last opp logo<input type="file" id="logoFile" accept="image/png,image/jpeg" hidden></label>${s.logo ? `<button class="btn sm danger delBtn" data-a="logoDel">Slett</button>` : ""}</div>
   </section>
   <section class="card" style="display:grid;gap:12px"><h3>Sikkerhetskopi</h3>
-    <div class="row"><button class="btn" data-a="exportJson">Last ned backup</button><label class="btn">Les inn backup<input type="file" id="importFile" accept="application/json,.json" hidden></label></div>
+    <div class="row"><button class="btn" data-a="exportJson">Last ned backup</button><label class="btn">Les inn backup<input type="file" id="importFile" accept="application/json,.json" hidden></label><button class="btn" data-a="trashOpen">Papirkurv (${Object.keys(S.trash || {}).length})</button></div>
     <p class="small muted">${Object.keys(S.entries).length} føringer · ${Object.keys(S.trips).length} reiser · ${VERSION}</p>
   </section>` : ""}`;
 }
@@ -2770,7 +2857,7 @@ function drawEntry(){
     <div class="fgrid">
       <label class="field"><span>Ordre / arbeidsordre</span><input id="eRef" value="${esc(e.ref)}" placeholder="f.eks. WO 45123"></label>
       <label class="field"><span>Sted / installasjon</span><input id="eLoc" value="${esc(e.location)}" placeholder="f.eks. Johan Sverdrup"></label>
-      <label class="field"><span>Mob./demob. (antall, settes til 1 når dagen har mob.-timer)</span><input id="eMob" type="number" min="0" step="1" value="${esc(e.mob||0)}"></label>
+      <label class="field"><span>Mob./demob. (antall veier – teller bare når dagen har mob.-timer)</span><input id="eMob" type="number" min="0" step="1" value="${esc(e.mob||0)}"></label>
     </div>
     ${isLocked(e.date, e.contractId) ? `<div class="banner">Denne dagen er signert av kunden og låst. Lås opp under «Signerte timelister» for å endre.</div>` : ""}
     ${holidayName(e.date) ? `<div class="banner info">${esc(holidayName(e.date))} – helligdagssatser brukes.</div>` : ""}
@@ -2814,7 +2901,7 @@ function bindEntry(){
 function calcEntry(){
   const e = editing.obj, c = contractById(e.contractId);
   const others = Object.entries(S.entries).filter(([k,x]) => x.date === e.date && k !== editing.id && whoOf(x) === whoOf(e)).map(([,x]) => x);
-  const cu = customerCalc(e.date, c, [e].concat(others.filter(x => x.contractId === e.contractId)), tourOrdBefore(e.date, whoOf(e)));
+  const cu = customerCalc(e.date, c, [e].concat(others.filter(x => x.contractId === e.contractId)), tourOrdBefore(e.date, whoOf(e)), tourDaysBefore(e.date, whoOf(e)));
   const pa = personPay(e.date, [e].concat(others), whoOf(e));
   const t = entryTotals(e);
   document.querySelectorAll("#eLines .lineRow[data-i]").forEach(r => { const l = e.lines[+r.dataset.i]; const h = r.querySelector('[data-l="hours"]'); if (h && l.start && l.end){ h.value = ""; h.placeholder = hr(lineHours(l)); } });
@@ -2869,11 +2956,11 @@ function offshoreDays(tr, c){
   tr.days = Array.from({length:n}, (_, i) => { const o = Object.assign({}, tr.days[i] || {}); if (i === 0 || i === n - 1){ o.offshore = false; o.lodging = "dag"; if (o.dagH === undefined) o.dagH = ""; } else { o.offshore = true; delete o.lodging; delete o.dagH; } return o; });
 }
 function drawTrip(){
-  const tr = editing.obj, hi = isHire(whoOf(tr)), pw = hi ? "Innleid" : "Ansatt", d = tripDiet(tr), m = tripMoney(tr), fxT = mobModeOf(contractById(tr.contractId)) === "fixed" && !!contractById(tr.contractId);
+  const tr = editing.obj, hi = isHire(whoOf(tr)), pw = hi ? "Innleid" : "Ansatt", d = tripDiet(tr), m = tripMoney(tr), fxT0 = mobModeOf(contractById(tr.contractId)) === "fixed" && !!contractById(tr.contractId), fxS = fxOn(contractById(tr.contractId)), fxT = fxT0 && !fxS;
   const lodgeSel = (i, v, h, ph) => `<div class="row" style="gap:4px;flex-wrap:nowrap"><select class="inp${v === "dag" ? "" : " wide"}" id="dy-${i}-lodging" data-day="${i}" data-k="lodging" aria-label="Overnatting" ><option value="dag"${v==="dag"?" selected":""}>Dagreise</option><option value="hotell"${["hotell","pensjonat","privat"].includes(v)?" selected":""}>Overnatting</option><option value="ulegitimert"${v==="ulegitimert"?" selected":""}>Uten kvittering</option></select>${v === "dag" ? `<input class="inp" style="width:3em;padding:4px 5px;text-align:right" type="number" step="0.5" min="0" id="dy-${i}-dagH" data-day="${i}" data-k="dagH" value="${esc(h ?? "")}" placeholder="${ph || "t"}" aria-label="Timer reise"><span class="small muted">t</span>` : ""}</div>`
   openSheet(`
     <div class="row spread"><h2>${editing.id ? "Reise" : "Ny reise"}${editing.obj.who !== null ? " – " + esc(personName(whoOf(editing.obj))) : ""}</h2><button class="btn ghost" data-a="close">Lukk</button></div>
-    ${fxT ? `<div class="fxNote"><b>Fastpris mob./demob.</b> – diett og kjøring faktureres ikke kunden. Utlegg faktureres bare når du huker av «faktureres i tillegg til fastpris».</div>` : ""}
+    ${fxT0 ? `<div class="fxNote"><b>Fastpris mob./demob.</b> – ${fxS ? "dekker reisen ut og hjem. Diett og hotell under oppholdet faktureres kunden. " + (kmBilled(contractById(tr.contractId)) ? "Kjøring faktureres i tillegg." : "Kjøring faktureres ikke.") + " Andre utlegg (bom, ferje, fly …) faktureres bare når du huker av «faktureres i tillegg til fastpris»." : (kmBilled(contractById(tr.contractId)) ? "diett faktureres ikke kunden, kjøring faktureres i tillegg." : "diett og kjøring faktureres ikke kunden.") + " Utlegg faktureres bare når du huker av «faktureres i tillegg til fastpris»."}</div>` : ""}
     <div class="tripCols"><div class="tf">
     <div class="fgrid">
       ${tr.gen ? `<label class="field"><span>Person</span><div class="whoOne">${esc(personName(whoOf(tr)))}</div></label>` : `<label class="field"><span>Person</span><select id="tWho">${tr.who === null ? `<option value="__" selected>Velg person …</option>` : ""}${personIds().map(w => `<option value="${esc(w)}"${tr.who !== null && whoOf(tr) === w ? " selected" : ""}>${esc(personName(w))}</option>`).join("")}</select></label>`}
@@ -2904,7 +2991,7 @@ function drawTrip(){
     </section>
 
     <section class="tk" style="display:grid;gap:8px"><div class="secHd"><h3>Kjøring</h3>${tr.legs.length ? (() => { const km = tr.legs.reduce((a, l) => a + num(l.km), 0), bf = tr.legs.reduce((a, l) => a + num(l.toll) + num(l.ferry), 0); return `<span class="small muted">${hr(km)} km</span>`; })() : ""}</div>
-      ${tr.legs.map((l,i) => { const x = legCalc(l), open = editing.legOpen === i, dd = l.date ? `${+l.date.slice(8)}.${+l.date.slice(5,7)}` : "", rt = [l.from, l.to].filter(Boolean).join(" → ") || "Kjørestrekning", billed = !fxT && l.rebill !== false;
+      ${tr.legs.map((l,i) => { const x = legCalc(l), open = editing.legOpen === i, dd = l.date ? `${+l.date.slice(8)}.${+l.date.slice(5,7)}` : "", rt = [l.from, l.to].filter(Boolean).join(" → ") || "Kjørestrekning", kmOn = kmBilled(contractById(tr.contractId)), billed = kmOn && l.rebill !== false, kc = contractById(tr.contractId), kmKr = kc && num(kc.kmRate) > 0 ? num(l.km) * num(kc.kmRate) : x.full;
         const head = `<div class="row spread expHead" data-a="legOpen" data-i="${i}"><span class="expSum"><b>${esc(rt)}</b><span class="small muted"> · ${esc(dd)} · ${hr(num(l.km))} km${l.companyCar ? " · kNm firmabil" : ""}${billed ? " · faktureres" : ""}</span> ${legEst(l) ? `<span class="pill warn">estimat</span>` : ""}</span><span class="row" style="gap:6px"><b class="num">${l.companyCar ? "–" : kr(x.amount)}</b><span class="small muted">${open ? "▴" : "▾"}</span></span></div>`;
         if (!open) return `<div class="card expRow">${head}</div>`;
         return `<div class="card expCard open" style="display:grid;gap:8px;padding:10px 12px" data-leg="${i}">${head}
@@ -2922,8 +3009,8 @@ function drawTrip(){
         ${l.estNote ? `<p class="small muted">${esc(l.estNote)}</p>` : ""}
         <div class="row spread" style="flex-wrap:wrap;gap:8px"><div class="row" style="gap:8px;flex-wrap:wrap">
           <span class="seg"><label><input type="radio" name="car-${i}" data-lg="car" value="egen"${l.companyCar ? "" : " checked"}><span>Egen bil</span></label><label><input type="radio" name="car-${i}" data-lg="car" value="firma"${l.companyCar ? " checked" : ""}><span>kNm firmabil</span></label></span>
-          ${fxT ? "" : `<span class="seg cust"><label><input type="radio" name="lb-${i}" data-lg="bill" value="1"${l.rebill !== false ? " checked" : ""}><span>Faktureres kunde</span></label><label><input type="radio" name="lb-${i}" data-lg="bill" value="0"${l.rebill !== false ? "" : " checked"}><span>Ikke</span></label></span>`}
-          <span class="small muted num">${l.companyCar ? (hi ? "ingen km i avregningen" : "ingen km-godtgjørelse") : `${pw}: ${kr(x.amount)} kr (${kr(x.rate)} kr/km)`}${billed ? ` · kunde ${kr(x.full)} kr` : ""}</span></div>
+          ${!kmOn ? "" : `<span class="seg cust"><label><input type="radio" name="lb-${i}" data-lg="bill" value="1"${l.rebill !== false ? " checked" : ""}><span>Faktureres kunde</span></label><label><input type="radio" name="lb-${i}" data-lg="bill" value="0"${l.rebill !== false ? "" : " checked"}><span>Ikke</span></label></span>`}
+          <span class="small muted num">${l.companyCar ? (hi ? "ingen km i avregningen" : "ingen km-godtgjørelse") : `${pw}: ${kr(x.amount)} kr (${kr(x.rate)} kr/km)`}${billed ? ` · kunde ${kr(kmKr)} kr` : ""}</span></div>
           <div class="row" style="gap:6px"><a class="btn sm" target="_blank" rel="noopener" title="Åpner ruten i Google Maps (ny fane)" href="https://www.google.com/maps/dir/${encodeURIComponent(l.from||"")}/${encodeURIComponent(l.to||"")}">Google Maps</a><a class="btn sm" target="_blank" rel="noopener" href="https://bompengekalkulator.no/" title="Åpnes i ny fane. Før bombeløpet som utlegg av typen Bom.">Bompengekalkulator</a><button class="btn sm ico" data-a="legMore" data-i="${i}" title="Passasjerer, tilhenger, skogsvei" aria-expanded="${editing.legMore === i}">⋯</button><button class="btn sm ico danger" data-a="delLeg" data-i="${i}" title="Slett">✕</button></div></div>
       </div>`; }).join("")}
       <button class="addRow" data-a="addLeg">+ Legg til kjørestrekning</button>
@@ -3006,7 +3093,7 @@ function readTripForm(changed){
     box.querySelectorAll("[data-ex]").forEach(el => { const k = el.dataset.ex;
       if (k === "firmPaid") x.paidBy = el.checked ? "firma" : "meg";
       else if (k === "pb"){ if (el.checked) x.paidBy = el.value; }
-      else if (k === "bill"){ if (el.checked){ const fx = mobModeOf(contractById(tr.contractId)) === "fixed"; if (fx) x.fxBill = el.value === "1"; else x.rebill = el.value === "1"; } }
+      else if (k === "bill"){ if (el.checked){ const fx = mobModeOf(contractById(tr.contractId)) === "fixed"; if (fx && !fxHotel(x, contractById(tr.contractId))) x.fxBill = el.value === "1"; else x.rebill = el.value === "1"; } }
       else if (el.type === "checkbox") x[k] = el.checked;
       else if (el.type === "number") x[k] = el.value === "" ? "" : num(el.value);
       else x[k] = el.value; });
@@ -3446,12 +3533,12 @@ function contractEditorBase(id){
     ${(() => { const fx = mobModeOf(c) === "fixed"; return `<div class="fgrid">
       <label class="field"><span>Faktureringsform</span><select data-c="mobMode"><option value="actual"${fx ? "" : " selected"}>Etter regning</option><option value="fixed"${fx ? " selected" : ""}>Fastpris mob./demob.</option></select></label>
     </div>
-    <p class="small" id="fixNote" style="margin:0;color:var(--muted)"${fx ? "" : " hidden"}>Fastpris er valgt. Reisetid, diett og km faktureres ikke kunden. Utlegg kan likevel faktureres når du huker av på utlegget.</p>
-    <fieldset id="actWrap" class="plain"${fx ? " disabled" : ""}><div class="fgrid">
-      <label class="field"><span>Diett faktureres</span><select data-c="dietBill">${(c.planType || "offshore") !== "felt"
+    <fieldset id="actWrap" class="plain"><div class="fgrid">
+      <label class="field"><span>Diett faktureres</span><select data-c="dietBill"${fx && (c.planType || "offshore") !== "felt" ? " disabled" : ""}>${(c.planType || "offshore") !== "felt"
         ? `<option value="auto"${(c.dietBill||"auto")==="auto"?" selected":""}>Reisedagene ut og hjem (standard)</option><option value="all"${c.dietBill==="all"?" selected":""}>Alle døgn utenom dager på installasjonen</option><option value="none"${c.dietBill==="none"?" selected":""}>Ikke til kunde</option>`
         : `<option value="auto"${(c.dietBill||"auto")!=="none"?" selected":""}>Alle døgn (standard)</option><option value="none"${c.dietBill==="none"?" selected":""}>Ikke til kunde</option>`}</select></label>
-      <label class="field"><span>Km faktureres</span><select data-c="kmBill"><option value="auto"${(c.kmBill||"auto")!=="none"?" selected":""}>Ja</option><option value="none"${c.kmBill==="none"?" selected":""}>Ikke til kunde</option></select></label>
+      <label class="field" id="kmBillWrap"${fx ? " hidden" : ""}><span>Km faktureres</span><select data-c="kmBill"><option value="auto"${(c.kmBill||"auto")!=="none"?" selected":""}>Ja</option><option value="none"${c.kmBill==="none"?" selected":""}>Ikke til kunde</option></select></label>
+      <label class="field" id="kmFxWrap"${fx ? "" : " hidden"}><span>Km faktureres</span><select data-c="kmFx"><option value=""${c.kmFx ? "" : " selected"}>Nei – inkludert i fastpris</option><option value="1"${c.kmFx ? " selected" : ""}>Ja – i tillegg</option></select></label>
     </div></fieldset>
     <div class="fgrid">
       <label class="field" id="rReiseWrap"${fx ? " hidden" : ""}><span>Reisetid kr/t</span><input data-c="rReise" type="number" step="any" inputmode="decimal" value="${esc(c.rReise)}"><small class="hint" id="rReiseHint"${num(c.rReise) ? "" : ` style="color:var(--warn)"`}>${rReiseHint(c.rReise, fx)}</small></label>
@@ -3518,7 +3605,31 @@ function buildPayPdf(w, R){
   const sw = (Rx - M - 30) / 2; y = Math.max(y + 30, pdf.H - 140);
   [["Ansatt", personName(w || "")], ["Godkjent av", prof.company || "kNm Hydraulikk AS"]].forEach(([t, n], i) => { const x = M + i * (sw + 30); pdf.line(x, y, x + sw, y, "#1d2419", 0.6); pdf.text(x, y + 12, `${t} · ${n}`, {size:8, bold:true}); pdf.text(x, y + 24, "Dato og underskrift", {size:7.5, color:MUTED}); });
   pdf.line(M, pdf.H - 34, Rx, pdf.H - 34, LINE, 0.5); pdf.text(M, pdf.H - 22, `${prof.company || "kNm Hydraulikk AS"} · kNm Prosjekt ${VERSION} · Lønnsgrunnlag til regnskapsfører`, {size:7, color:MUTED});
+  payDaysPages(pdf, w || "", R, "Lønnsgrunnlag til regnskapsfører");
   return pdf;
+}
+/* Vedlegg til lønnsgrunnlag / avregning innleid: timeliste per dag etter lønnsreglene (summene stemmer med side 1) */
+function payDaysPages(pdf, w, R, foot){
+  const hire = isHire(w), c = contractById(R.contractId), prof = S.settings.profile, M = 36, Rx = pdf.W - M, BOT = pdf.H - 48, first = pdf.pages.length;
+  const list = entriesIn(R.from, R.to, R.contractId, w), byD = {}; list.forEach(e => (byD[e.date] = byD[e.date] || []).push(e));
+  const cols = [["Dato",50],["Dag",26],["Type",48],["Arbeid fra–til",70],["Reise fra–til",70],["Arbeid t",42,1],["Reise t",40,1],["Betalt reise",50,1],["Standby",42,1],[hire ? "Ordinær" : "OT 50 %",42,1],[hire ? "Overtid" : "OT 100 %",43,1]];
+  let y = M;
+  const head = () => { pdfLogo(pdf, M, y, 34); pdf.text(Rx, y + 14, "TIMELISTE", {size:15, bold:true, align:"right"}); pdf.text(Rx, y + 28, `${personName(w)} · ${fmtDateY(R.from)} – ${fmtDateY(R.to)}`, {size:9, align:"right", color:MUTED});
+    y += 44; pdf.rect(M, y, Rx - M, 2, GREEN); y += 12; pdf.text(M, y + 8, `${c ? c.name : "Alle prosjekter"} · timer etter lønnsreglene${hire ? " for innleid" : ""} – summene stemmer med side 1`, {size:8, color:MUTED}); y += 18;
+    pdf.rect(M, y, Rx - M, 16, SOFT); let x = M + 4; cols.forEach(([l, cw, r]) => { pdf.text(r ? x + cw - 6 : x, y + 11, l, {size:7.5, bold:true, align: r ? "right" : "left"}); x += cw; }); y += 16; };
+  const row = (v, o = {}) => { if (y + 14 > BOT){ pdf.newPage(); y = M; head(); } if (o.fill) pdf.rect(M, y, Rx - M, 14, o.fill);
+    let x = M + 4; cols.forEach(([, cw, r], i) => { pdf.text(r ? x + cw - 6 : x, y + 10, pdf.fit(v[i] ?? "", 8, !!o.bold, cw - 6), {size:8, bold:!!o.bold, align: r ? "right" : "left"}); x += cw; }); y += 14; pdf.line(M, y, Rx, y, LINE, 0.4); };
+  pdf.newPage(); head();
+  const T = {a:0, r:0, p:0, s:0, h50:0, h100:0}, f = n => n ? hr(n) : "", tt = (es, ty) => es.flatMap(e => (e.lines || []).filter(l => ty.includes(l.type) && l.start && l.end).map(l => `${l.start}–${l.end}`)).join(", ");
+  Object.keys(byD).sort().forEach(d => { const es = byD[d], t = {arbeid:0, reise:0, mob:0, standby:0}; es.forEach(e => { const x = entryTotals(e); for (const k in t) t[k] += x[k] || 0; });
+    const p = personPay(d, es, w), k = dayKind(d, contractById(es[0].contractId)), hol = holidayName(d);
+    T.a += t.arbeid; T.r += t.reise + t.mob; T.p += p.reise; T.s += t.standby; T.h50 += p.h50; T.h100 += p.h100;
+    row([fmtDateY(d), DOW[D(d).getUTCDay()], [...new Set(es.map(e => DT_SHORT[e.dayType] || e.dayType))].join("/"), tt(es, ["arbeid"]), tt(es, ["reise","mob"]), f(t.arbeid), f(t.reise + t.mob), f(p.reise), f(t.standby), f(p.h50), f(p.h100)], {fill: hol ? "#f9e1de" : k !== "hverdag" ? "#eef2ea" : null}); });
+  if (!list.length) row(["Ingen føringer i perioden"]);
+  row(["Sum", "", "", "", "", hr(T.a), hr(T.r), hr(T.p), hr(T.s), hr(T.h50), hr(T.h100)], {bold:true, fill:"#f4f6f1"});
+  y += 6; pdf.text(M, y + 8, hire ? "Ordinær/overtid etter innleides satser og terskel. Betalt reise = reisetid som faktureres av innleid." : "OT 50 %/100 % = overtidstillegg etter lønnsreglene. Betalt reise = reisetid utenfor ordinær arbeidstid som gir lønn.", {size:7, color:MUTED});
+  const n = pdf.pages.length; for (let i = first; i < n; i++){ pdf.cur = pdf.pages[i]; pdf.line(M, pdf.H - 34, Rx, pdf.H - 34, LINE, 0.5); pdf.text(M, pdf.H - 22, `${prof.company || "kNm Hydraulikk AS"} · kNm Prosjekt ${VERSION} · ${foot} – timeliste`, {size:7, color:MUTED}); pdf.text(Rx, pdf.H - 22, `Side ${i + 1} av ${n}`, {size:7, color:MUTED, align:"right"}); }
+  pdf.cur = pdf.pages[0]; pdf.text(Rx, pdf.H - 22, `Side 1 av ${n}`, {size:7, color:MUTED, align:"right"}); pdf.cur = pdf.pages[n - 1];
 }
 // Avregning innleid: grunnlag for fakturaen fra innleid person (timer etter hans satser + diett, km, utlegg)
 function buildHirePdf(w, R){
@@ -3548,6 +3659,7 @@ function buildHirePdf(w, R){
   const sw = (Rx - M - 30) / 2; y = Math.max(y + 30, pdf.H - 140);
   [["Innleid", personName(w)], ["Godkjent av", prof.company || "kNm Hydraulikk AS"]].forEach(([t, n], i) => { const x = M + i * (sw + 30); pdf.line(x, y, x + sw, y, "#1d2419", 0.6); pdf.text(x, y + 12, `${t} · ${n}`, {size:8, bold:true}); pdf.text(x, y + 24, "Dato og underskrift", {size:7.5, color:MUTED}); });
   pdf.line(M, pdf.H - 34, Rx, pdf.H - 34, LINE, 0.5); pdf.text(M, pdf.H - 22, `${prof.company || "kNm Hydraulikk AS"} · kNm Prosjekt ${VERSION} · Avregning innleid`, {size:7, color:MUTED});
+  payDaysPages(pdf, w, R, "Avregning innleid");
   return pdf;
 }
 function exportPay(w){
@@ -3775,6 +3887,9 @@ document.addEventListener("click", ev => {
       previewPdf(`${hi ? "Avregning innleid" : "Lønnsgrunnlag"} – ${personName(w)}`, hi ? buildHirePdf(w, R2) : buildPayPdf(w, R2), `${hi ? "Avregning" : "Lonnsgrunnlag"}_${slug(personName(w))}_${R2.from}_${R2.to}.pdf`); break; }
     case "csvDetail": exportDetail(); break;
     case "exportJson": exportJson(); break;
+    case "trashOpen": trashSheet(); break;
+    case "lunchApply": lunchApply(el.dataset.id); break;
+    case "trashRestore": trashRestore(el.dataset.id); break;
   }
 });
 document.addEventListener("change", ev => { if (ev.target && ev.target.id === "qC"){ const h = $("#qCo"); if (h) h.textContent = ordPoText(contractById(ev.target.value)) || "Ingen ordre nr på prosjektet"; } });
@@ -3788,7 +3903,10 @@ document.addEventListener("change", ev => {
   }
   if (el.id === "importFile" && el.files && el.files[0]) importJson(el.files[0]);
   if (el.id === "timerFile" && el.files && el.files.length){ const fs = [...el.files]; el.value = ""; (async () => { for (const f of fs) await importTimerFile(f); })(); }
-  if (el.dataset && el.dataset.w){ inlineChange(el); doRender(); } // tegn med en gang selv om feltet har fokus
+  if (el.dataset && el.dataset.w){ // Timeliste: lagre og tegn på nytt først når fra–til-parene er komplette (ellers forsvinner halvt utfylte felt)
+    const row = {}; document.querySelectorAll(`[data-w="${el.dataset.w}"]`).forEach(x => { row[x.dataset.f] = x.type === "checkbox" ? x.checked : x.value; });
+    const half = (a, b) => (a in row || b in row) && !!row[a] !== !!row[b];
+    if (!(half("rstart", "rend") || half("start", "end"))){ inlineChange(el); doRender(); } }
   if (el.id === "modeSel") setMode(el.value);
   if (el.dataset && el.dataset.ck === "person" && el.dataset.done !== el.value) crewPersonChange(+el.dataset.cr);
   if (el.dataset && (el.dataset.pf || el.dataset.cr || el.dataset.ce)) anbudSave();
@@ -3796,7 +3914,8 @@ document.addEventListener("change", ev => {
   if (el.dataset && el.dataset.ceAdd !== undefined && el.value){ const c = anbudRead(); if (c){ const r = c.planCrewRows[+el.dataset.ceAdd]; if (r){ r.exps = (r.exps || []).concat([{t: el.value, a: "", p:1}]); anbudSave(c); doRender(); const n = r.exps.length - 1, inp = document.querySelector(`[data-ce="${el.dataset.ceAdd}"][data-cj="${n}"][data-cf="a"]`); if (inp) inp.focus(); } } }
   if (el.dataset && el.dataset.c === "priceMode"){ const dag = el.value === "dag"; [["#dayRateWrap", !dag], ["#dagThrWrap", !dag], ["#timeDagNote", !dag], ["#offRuleTxt", dag], ["#thrWrap", dag]].forEach(([q, h]) => { const x = $(q); if (x) x.hidden = h; }); document.querySelectorAll("#sheetHost [data-daglock]").forEach(x => x.disabled = dag);
     const a1 = $('#dagThrWrap [data-c="ordThreshold"]'), a2 = $('#thrWrap [data-c="ordThreshold"]'); if (a1 && a2){ if (dag) a1.value = a2.value; else a2.value = a1.value; } }
-  if (el.dataset && el.dataset.c === "mobMode"){ const fx = el.value === "fixed", a = $("#mobFeeWrap"), n = $("#fixNote"), w = $("#actWrap"), rw = $("#rReiseWrap"); if (a) a.hidden = !fx; if (rw) rw.hidden = fx; if (n) n.hidden = !fx; if (w) w.disabled = fx; const rh = $("#rReiseHint"), rv = $('[data-c="rReise"]'); if (rh && rv) rh.textContent = rReiseHint(rv.value, fx); }
+  if (el.dataset && el.dataset.c === "mobMode"){ const fx = el.value === "fixed", a = $("#mobFeeWrap"), n = $("#fixNote"), w = $("#actWrap"), rw = $("#rReiseWrap"); if (a) a.hidden = !fx; if (rw) rw.hidden = fx; if (n) n.hidden = !fx; const ec = editing && editing.obj, onS = ec && (ec.planType || "offshore") === "felt"; const dS = $('#sheetHost [data-c="dietBill"]'); if (dS) dS.disabled = fx && !onS; const kbw = $("#kmBillWrap"); if (kbw) kbw.hidden = fx; const kfw = $("#kmFxWrap"); if (kfw) kfw.hidden = !fx; const rh = $("#rReiseHint"), rv = $('[data-c="rReise"]'); if (rh && rv) rh.textContent = rReiseHint(rv.value, fx); }
+  if (el.dataset && el.dataset.lunch){ const s2 = clone(S.settings), c2 = s2.contracts.find(x => x.id === S.anbSel); if (c2){ if (el.value) c2.paidLunch = true; else delete c2.paidLunch; persist("settings", "app", s2); if (!lunchAsk(c2.id)) toast(el.value ? "Betalt lunsj – ingen trekk" : "30 min lunsj trekkes på onshore-dager"); } return; }
   if (el.dataset && el.dataset.wd){ const s2 = clone(S.settings), c2 = s2.contracts.find(x => x.id === S.anbSel); if (c2){ c2.workDay = el.value; persist("settings", "app", s2); toast("Arbeidstid lagret"); } return; }
   if (el.dataset && el.dataset.pj && el.value){ const s2 = clone(S.settings), c2 = s2.contracts.find(x => x.id === S.anbSel); if (c2){ const a = el.dataset.pj === "projFrom" ? el.value : projStart(c2), b = el.dataset.pj === "projTo" ? el.value : projEnd(c2);
     c2.projFrom = a <= b ? a : b; c2.projTo = a <= b ? b : a; persist("settings","app",s2); doRender(); toast(`Prosjektperioden er ${fmtDateY(c2.projFrom)} – ${fmtDateY(c2.projTo)}`); } }
@@ -3833,7 +3952,7 @@ document.addEventListener("focusout", ev => { const el = ev.target; if (!el || !
   setTimeout(() => { const box = el.closest(".cxl"); if (box && box.contains(document.activeElement)) return; if (el.value !== "") return;
     const c = anbudRead(); if (!c) return; const r = c.planCrewRows[+el.dataset.ce]; if (!r) return; const j = +el.dataset.cj; if (r.exps[j] && (r.exps[j].a === "" || !num(r.exps[j].a))){ r.exps.splice(j, 1); anbudSave(c); render(); } }, 0); });
 
-if (location.protocol === "file:") window.__knm = {S, buildPayPdf, buildHirePdf, logoFixOnce, travelCrm, syncCrewTrips, crewTripPlan, parseReceiptText, interpretReceipt, readOneReceipt, buildExpPdf, expLinesFor, applyHotel, matchPerson, bulkReceipts, amlCalc, scanReceipt, buildPlanPdf, statusOf, projectOutside, perRange, buildPdf, buildXlsx, exportXlsx, planCalc, isLocked, customerCalc, payCalc, tripDiet, tripMoney, holidays, persist, amlStats, periodSum, render};
+if (location.protocol === "file:") window.__knm = {S, trashSheet, recentOverlay, recentW, buildPayPdf, buildHirePdf, logoFixOnce, travelCrm, syncCrewTrips, crewTripPlan, parseReceiptText, interpretReceipt, readOneReceipt, buildExpPdf, expLinesFor, applyHotel, matchPerson, bulkReceipts, amlCalc, scanReceipt, buildPlanPdf, statusOf, projectOutside, perRange, buildPdf, buildXlsx, exportXlsx, planCalc, isLocked, customerCalc, payCalc, tripDiet, tripMoney, holidays, persist, amlStats, periodSum, render};
 /* ============ kNm Timer (mobilapp uten Claude) og innlesing i kNm Prosjekt ============
    Samme kode brukes i begge filer. FIELD = true i kNm Timer.
    Lenke: <app>#k=<base64url(gzip(JSON))>  · Fil fra appen: {fmt:"knm-timer", v:1, ...} */
@@ -3849,7 +3968,7 @@ async function unpackLink(str){
   const raw = kind === "z" ? new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()) : bytes;
   return JSON.parse(new TextDecoder().decode(raw));
 }
-const LINK_C = ["id","name","customer","orderNo","po","planType","workDay","startDate","endDate","projFrom","projTo","hotbedDefault","mobMode"];
+const LINK_C = ["id","name","customer","orderNo","po","planType","workDay","startDate","endDate","projFrom","projTo","hotbedDefault","mobMode","paidLunch"];
 /* Kontrakter og reiser som følger med lenken til en person */
 function linkPayload(w){
   const t = todayStr(), act = (S.settings.contracts || []).filter(c => statusOf(c) === "aktiv");
@@ -3891,7 +4010,14 @@ async function importTimerFile(file){
   for (const [id, e] of Object.entries(d.entries || {})){
     const nid = pre + id, ex = S.entries[nid];
     if (ex && num(ex.updated) >= num(e.updated)){ R.likE++; continue; }
-    if (!ex && Object.entries(S.entries).some(([k, o]) => !k.startsWith(pre) && o.date === e.date && whoOf(o) === w && o.contractId === e.contractId)){ R.dobbel.push(e.date); continue; }
+    if (!ex){ // Samme person, dato og prosjekt finnes fra før med annen ID (f.eks. ført på nytt i appen)
+      const sameDay = Object.entries(S.entries).filter(([k, o]) => o.date === e.date && whoOf(o) === w && o.contractId === e.contractId);
+      const sig = o => JSON.stringify((o.lines || []).map(l => [l.type, l.start || "", l.end || "", num(l.pause), l.start && l.end ? 0 : num(l.hours)]).sort());
+      const old = sameDay.filter(([k]) => k.startsWith(pre) && !(k.slice(pre.length) in (d.entries || {})));
+      if (sameDay.length && sameDay.every(([k]) => old.some(([k2]) => k2 === k)) && old.every(([, o]) => sig(o) === sig(e)) && old.every(([k]) => S.entries[k] && !isLocked(e.date, e.contractId))){
+        old.forEach(([k]) => persist("entries", k, null)); R.erstattet = (R.erstattet || 0) + 1; // lik kopi: byttes ut, ingen dobbel
+      } else if (sameDay.length){ R.dobbel.push(e.date); continue; }
+    }
     const ok = persist("entries", nid, Object.assign(clone(e), {who: w, src: "timer"}));
     if (ok === false) R.last++; else if (ex) R.oppE++; else R.nyE++;
   }
@@ -3918,12 +4044,12 @@ async function importTimerFile(file){
     if (JSON.stringify(t2) !== JSON.stringify(t)){ t2.updated = Date.now(); if (persist("trips", tid, t2) === false) R.last++; }
   }
   const nm = personName(w).split(" ")[0], L = [];
-  L.push(`Timer: ${R.nyE} nye, ${R.oppE} endret, ${R.slE} slettet${R.likE ? `, ${R.likE} uendret` : ""}.`);
+  L.push(`Timer: ${R.nyE} nye, ${R.oppE} endret, ${R.slE} slettet${R.likE ? `, ${R.likE} uendret` : ""}${R.erstattet ? `, ${R.erstattet} ført på nytt i appen (gammel kopi byttet ut)` : ""}.`);
   if (R.nyT || R.oppT) L.push(`Reiser fra appen: ${R.nyT} nye, ${R.oppT} endret.`);
   if (R.utlegg) L.push(`Utlegg på eksisterende reiser: ${R.utlegg} nye.`);
   if (R.kv) L.push(`Kvitteringer lagret: ${R.kv}.`);
   const warn = [];
-  if (R.dobbel.length) warn.push(`Ikke lest inn – ${nm} har allerede timer på samme prosjekt ført av deg: ${[...new Set(R.dobbel)].map(fmtDate).join(", ")}. Slett din føring og les inn på nytt hvis appen skal gjelde.`);
+  if (R.dobbel.length) warn.push(`Ikke lest inn – ${nm} har allerede andre timer på samme dag og prosjekt: ${[...new Set(R.dobbel)].map(fmtDate).join(", ")}. Føringen hos deg beholdes. Slett den og les inn på nytt hvis appen skal gjelde.`);
   if (R.last) warn.push(`${R.last} endringer gjelder signert/låst periode eller avsluttet prosjekt og ble ikke lagret.`);
   if (R.kvIkkeIFil) warn.push(`${R.kvIkkeIFil} ${R.kvIkkeIFil === 1 ? "kvittering" : "kvitteringer"} var ikke med i filen (eldre enn 60 dager, eller ikke lagret på telefonen). Be ${nm} sende på nytt, eller legg bildet ved selv på utlegget.`);
   if (R.kvFeil.length) warn.push(`${R.kvFeil.length} ${R.kvFeil.length === 1 ? "kvittering" : "kvitteringer"} kunne ikke lagres (${[...new Set(R.kvFeil)].join(", ")}). Les inn samme fil på nytt – utleggene blir ikke doble.`);
