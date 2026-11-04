@@ -322,7 +322,7 @@ body.mob{ --bg:#0b0f0c; --surface:#131a15; --surface2:#1b241d; --line:#26332a; -
   --f-display:"Barlow Semi Condensed","Arial Narrow",system-ui,sans-serif; --f-body:"Barlow",system-ui,-apple-system,sans-serif; --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace; color-scheme:dark; font-size:16px }
 body.mob.mlight{ --bg:#f2f4ef; --surface:#ffffff; --surface2:#e6ebe1; --line:#c9d2c1; --fg:#0f150c; --muted:#4c5846; --accent:#5c9a22; --accent-ink:#3b6d10; --accent-soft:#dcefc8; --on-accent:#ffffff; --warn:#9a6f00; --warn-soft:#fbf0cc; --bad:#b3261e; --bad-soft:#f9e1de; --good:#2f7d32; color-scheme:light }
 body.mob .modeBtn{ padding:6px 10px; font-size:.8rem; margin-left:6px }
-body.mob .top-in{ gap:8px; flex-wrap:nowrap } body.mob .brand{ flex:none } body.mob .brand .ver{ display:none } body.mob .brand .mark{ letter-spacing:.08em } body.mob .sync{ margin-left:auto; flex:1 1 auto; min-width:0; justify-content:flex-end; overflow:hidden } body.mob .sync span{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+body.mob .top-in{ gap:8px; flex-wrap:nowrap } body.mob .brand{ flex:none } body.mob .brand .ver{ display:none } body.mob.fieldapp .brand{ display:flex; align-items:center; gap:6px } body.mob.fieldapp .brand .ver{ display:inline-block; font-size:.62rem; padding:0 5px } body.mob .brand .mark{ letter-spacing:.08em } body.mob .sync{ margin-left:auto; flex:1 1 auto; min-width:0; justify-content:flex-end; overflow:hidden } body.mob .sync span{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 body.mob .brand{ min-width:0 } body.mob .brand .mark{ white-space:nowrap }
 body.mob .sync{ font-size:.72rem }
 body.mob .brand .mark{ font:600 .8rem var(--f-mono); letter-spacing:.14em; text-transform:uppercase; color:var(--muted) }
@@ -377,7 +377,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.4</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.5</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -392,7 +392,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v1.4";
+const VERSION = "v1.5";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
