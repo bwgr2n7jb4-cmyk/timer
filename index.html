@@ -359,7 +359,7 @@ body.mob .btn{ padding:10px 16px }
 .dl .tt{ font:600 .72rem var(--f-mono); text-transform:uppercase; letter-spacing:.06em; color:var(--muted) }
 .chips{ display:flex; gap:8px; flex-wrap:wrap }
 .chip{ border:1px solid var(--line); background:var(--surface2); border-radius:99px; padding:11px 16px; font:600 1rem var(--f-mono); cursor:pointer; color:var(--fg) }
-.chip:hover{ border-color:var(--accent) }
+.chip:hover{ border-color:var(--accent) } .chip.xty{ padding:9px 13px; font:600 .9rem var(--f-body) } .chip[aria-pressed="true"]{ background:var(--accent); border-color:var(--accent); color:var(--on-accent, #fff) }
 .fgrid.big input,.fgrid.big select{ font-size:1.3rem; padding:12px }
 .btn.big{ padding:16px; font-size:1.15rem; width:100%; border-radius:12px }
 .qsum{ font:700 2.2rem var(--f-mono); text-align:center }
@@ -377,7 +377,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.5</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.6</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -392,7 +392,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v1.5";
+const VERSION = "v1.6";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -637,12 +637,15 @@ function legsToExp(tr){ tr.legs = tr.legs || []; tr.expenses = tr.expenses || []
       tr.expenses.push(Object.assign({date: l.date || (tr.start || "").slice(0, 10), type: t, text: rt, amount: a, paidBy: l.paidBy === "firma" ? "firma" : "meg", rebill: l.rebill !== false, lid: l.lid}, l.gen ? {gen: t + "-" + l.gen, genSrc: a} : {}, l.gen && !est ? {conf: true} : {})); });
     delete l.toll; delete l.ferry; if (l.genSrc){ delete l.genSrc.toll; delete l.genSrc.ferry; } });
   return tr; }
-const expLabel = x => { const a = [EXP_TYPE[x.type] || "", (x.vendor || "").trim(), (x.text || "").trim()].filter(Boolean); return a.filter((v, i) => a.findIndex(w => w.toLowerCase() === v.toLowerCase()) === i).join(" – ") || "Utlegg"; };
+// Utleggstype: lagret type, eller gjettet fra tekst/leverandør når typen er «Annet» (utlegg fra mobil/kNm Timer før v27.7)
+const XGUESS = [["taxi", /\btaxi|drosje|uber\b|bolt\b/i], ["parkering", /parker|p-hus|easypark|apcoa|onepark/i], ["fly", /\bfly\b|flybillett|sas\b|norwegian|widerøe|wideroe|flight/i], ["hotell", /hotell|hotel|overnatt|scandic|thon|clarion|comfort|quality|radisson/i], ["bom", /\bbom\b|bompeng|autopass|ferde\b|fjellinjen/i], ["ferje", /ferje|ferge|fjord1|norled|boreal/i], ["tog_buss", /\btog\b|\bbuss\b|vy\b|flytoget|kolumbus|skyss|flybuss/i], ["leiebil", /leiebil|hertz|avis\b|europcar|sixt|budget/i], ["drivstoff", /drivstoff|bensin|diesel|circle k|esso|shell\b|uno-x|yx\b/i], ["mat", /\bmat\b|lunsj|middag|frokost|kafé|kafe|restaurant/i]];
+function xType(x){ const t = x && x.type; if (t && t !== "annet") return t; const s = [x && x.text, x && x.vendor].filter(Boolean).join(" "); const g = s && XGUESS.find(([, re]) => re.test(s)); return g ? g[0] : (t || "annet"); }
+const expLabel = x => { const a = [EXP_TYPE[xType(x)] || "", (x.vendor || "").trim(), (x.text || "").trim()].filter(Boolean); return a.filter((v, i) => a.findIndex(w => w.toLowerCase() === v.toLowerCase()) === i).join(" – ") || "Utlegg"; };
 // Fastpris onshore: fastprisen dekker bare reisen ut/hjem. Diett og hotell under oppholdet faktureres som etter regning.
 const fxOn = c => !!c && mobModeOf(c) === "fixed" && (c.planType || "offshore") === "felt";
 // Km til kunde: etter regning = «Km faktureres» (standard ja). Fastpris = bare når «Km i tillegg til fastpris» er valgt.
 const kmBilled = c => !!c && (mobModeOf(c) === "fixed" ? !!c.kmFx : (c.kmBill || "auto") !== "none");
-const fxHotel = (x, c) => fxOn(c) && x.type === "hotell";
+const fxHotel = (x, c) => fxOn(c) && xType(x) === "hotell";
 const expBilled = (x, t) => { const c = t && contractById(t.contractId); return c && mobModeOf(c) === "fixed" && !fxHotel(x, c) ? !!x.fxBill : x.rebill !== false; };
 const bfLabel = (toll, ferry) => num(toll) > 0 && num(ferry) > 0 ? "Bom og ferje" : num(ferry) > 0 ? "Ferje" : "Bom";
 // Estimat fra anbud: linjer laget fra mannskapskortet som verken er endret eller bekreftet
@@ -887,7 +890,7 @@ function tripMoney(tr, from, to){
     if (l.paidBy !== "firma") refund += x.toll + x.ferry;
     if (l.rebill !== false && !fixedMob){ rebill += (x.toll + x.ferry); if (x.toll + x.ferry > 0) expLines.push({kind: num(x.ferry) > 0 && num(x.toll) > 0 ? "bom_ferje" : num(x.ferry) > 0 ? "ferje" : "bom", text:`${bfLabel(x.toll, x.ferry)}${[l.from, l.to].filter(Boolean).join("–") ? " " + [l.from, l.to].filter(Boolean).join("–") : ""}`, date:l.date || t0, base:x.toll + x.ferry}); } if (l.rebill !== false && kmBilled(c)) kmCust += num(c.kmRate) > 0 ? num(l.km)*num(c.kmRate) : x.full; });
   let exp = 0;
-  (tr.expenses||[]).filter(x => inR(x.date || t0)).forEach(x => { exp += num(x.amount); if (x.paidBy !== "firma") refund += num(x.amount); if (expBilled(x, tr)){ rebill += num(x.amount); if (num(x.amount) > 0) expLines.push({kind:x.type || "annet", text:expLabel(x), date:x.date || t0, base:num(x.amount)}); } });
+  (tr.expenses||[]).filter(x => inR(x.date || t0)).forEach(x => { exp += num(x.amount); if (x.paidBy !== "firma") refund += num(x.amount); if (expBilled(x, tr)){ rebill += num(x.amount); if (num(x.amount) > 0) expLines.push({kind:xType(x), text:expLabel(x), date:x.date || t0, base:num(x.amount)}); } });
   const taxableDiet = Math.max(0, d.diet + d.night - d.taxfree);
   return {diet:d.diet, night:d.night, dietTaxable:taxableDiet, km, kmAmt, kmTax, tollFerry, exp, refund,
           toEmployee: d.diet + d.night + kmAmt + refund, custExp: rebill*(1+mk), custExpBase: rebill, expLines, markup: mk, kmCust, fixedMob, custDiet, custDietDays, custTotal: rebill*(1+mk) + kmCust + custDiet};
@@ -1332,7 +1335,8 @@ function qExpSheet(tid){
       <label class="field"><span>Beløp kr</span><input type="number" id="qXA" min="0" step="0.01" inputmode="decimal" placeholder="0,00"></label>
       <label class="field"><span>Dato</span><input type="date" id="qXDate" value="${d}"></label>
     </div>
-    <label class="field"><span>Hva</span><input id="qXD" placeholder="Taxi, parkering, mat på flyplass …"></label>
+    <div class="field"><span>Type</span><div class="chips" id="qXTy">${["taxi","parkering","fly","hotell","mat","bom","ferje","tog_buss","annet"].map(k => `<button type="button" class="chip xty" data-a="qXType" data-t="${k}" aria-pressed="false">${EXP_TYPE[k]}</button>`).join("")}</div></div>
+    <label class="field"><span>Beskrivelse (valgfri)</span><input id="qXD" placeholder="F.eks. Sola–hotell, flyplass …"></label>
     <label class="field"><span>Reise</span><select id="qXT">${list.map(t => `<option value="${esc(t.id)}"${t.id === def ? " selected" : ""}>${esc(t.title || t.destination || "Reise")}${whoOf(t) ? " – " + esc(personName(whoOf(t))) : ""} · ${t.start ? fmtDateY(t.start.slice(0,10)) : ""}</option>`).join("")}</select></label>
     <div class="row"><label class="check emp"><input type="checkbox" id="qXF"> Betalt av firma (ingen refusjon)</label><label class="check cust"><input type="checkbox" id="qXR" checked> Kunde: viderefaktureres</label></div>
     ${S.assets ? `<div class="photoRow"><label class="photoBtn" id="qXPl">Ta bilde<input type="file" id="qXP" accept="image/*" capture="environment" hidden></label><label class="photoBtn">Last opp bilde eller PDF<input type="file" id="qXP2" accept="image/*,application/pdf" hidden></label></div><div id="qXPs" class="small muted"></div>` : `<p class="small muted">Kvitteringsbilde kan legges ved når siden er åpnet fra claude.ai.</p>`}
@@ -1867,7 +1871,7 @@ function exportXlsx(from, to, contractId, who){
     if (all) Object.values(ps.hires).forEach(Hh => { lg.push([]); lg.push([B(`Innleid: ${Hh.name} – forventet faktura`)]); lg.push(["Timer og reisetid", T(Hh.h50 + Hh.h100 + Hh.reise), K(Hh.total)]); lg.push(["Diett, km og utlegg", "", K(Hh.tm.toEmployee)]); lg.push([B("Sum eks. mva"), "", KB(Hh.invoice)]); });
     const sheets = [{name:"Timeliste", rows:tl, widths:[12,6,18,24,11,13,7,7,9,8,14,18,28,6]}, {name:"Fakturagrunnlag", rows:fg, widths:[44,10,8,12,14]}, {name: isHire(who) ? "Innleid faktura" : "Lønnsgrunnlag", rows:lg, widths:[38,10,14]}];
     { const el = expLinesFor({from, to, contractId, who}); if (el.length){ const ut = top("Utlegg"); ut.push(["Nr","Dato","Person","Reise","Type","Leverandør","Beskrivelse","Betalt av","Viderefakt.","Valuta","Beløp valuta","MVA","Beløp NOK","Kontroll"].map(HE));
-      el.forEach(l => { const x = l.x; ut.push([T(l.n), fmtDateY(l.d), personName(l.who), l.t.title || l.t.destination || "", EXP_TYPE[x.type] || "Annet", x.vendor || "", x.text || "", x.paidBy === "firma" ? "Firma" : "Ansatt", expBilled(x, l.t) ? "Ja" : "Nei", x.currency || "NOK", x.currency ? K(num(x.amountCur)) : "", x.vat !== "" && x.vat !== undefined ? K(num(x.vat)) : "", x.amount !== "" ? K(num(x.amount)) : "", x.check ? "Ikke kontrollert" : (x.currency && x.amount === "" ? "Mangler NOK" : "")]); });
+      el.forEach(l => { const x = l.x; ut.push([T(l.n), fmtDateY(l.d), personName(l.who), l.t.title || l.t.destination || "", EXP_TYPE[xType(x)] || "Annet", x.vendor || "", x.text || "", x.paidBy === "firma" ? "Firma" : "Ansatt", expBilled(x, l.t) ? "Ja" : "Nei", x.currency || "NOK", x.currency ? K(num(x.amountCur)) : "", x.vat !== "" && x.vat !== undefined ? K(num(x.vat)) : "", x.amount !== "" ? K(num(x.amount)) : "", x.check ? "Ikke kontrollert" : (x.currency && x.amount === "" ? "Mangler NOK" : "")]); });
       const sm = expSums(el); ut.push([]); ut.push([B("Sum"), "", "", "", "", "", "", "", "", "", "", K(sm.vat), KB(sm.tot), ""]); ut.push(["Til refusjon (ansatt)", "", "", "", "", "", "", "", "", "", "", "", K(sm.ref)]); ut.push(["Betalt av firma", "", "", "", "", "", "", "", "", "", "", "", K(sm.firm)]); ut.push(["Viderefaktureres (kost)", "", "", "", "", "", "", "", "", "", "", "", K(sm.rebill)]);
       sheets.push({name:"Utlegg", rows:ut, widths:[5,11,18,22,10,18,32,10,10,7,12,10,12,14]}); } }
     if (c && c.startDate){ const pl = planCalc(c), pa = planActual(c), an = top("Anbud mot faktisk");
@@ -3022,7 +3026,7 @@ function drawTrip(){
         return `<span class="small muted" title="Budsjett fra anbud: ${esc(why)}">Ført <b style="${act ? `color:${act > tot ? "var(--bad)" : "var(--accent-ink)"}` : ""}">${kr0(act)}</b> av budsjett ${kr0(tot)}</span>`; })()}</div>
       ${tr.budget && tr.budget.note ? `<span class="small muted">${esc(tr.budget.note)}</span>` : ""}
       ${tr.expenses.map((x,i) => { const open = editing.expOpen === i, who1 = (personName(whoOf(tr)) || "Ansatt").split(" ")[0], billed = expBilled(x, tr), noAmt = !(num(x.amount) > 0) && (x.check || x.receipt || x.currency);
-        const dd = x.date ? `${+x.date.slice(8)}.${+x.date.slice(5,7)}` : "", tl = (x.text || "").trim(), tn = EXP_TYPE[x.type] || "Utlegg";
+        const dd = x.date ? `${+x.date.slice(8)}.${+x.date.slice(5,7)}` : "", tl = (x.text || "").trim(), tn = EXP_TYPE[xType(x)] || "Utlegg";
         const flags = `${expEst(x) ? `<span class="pill warn">estimat</span>` : ""}${noAmt ? `<span class="pill bad">mangler beløp</span>` : x.check ? `<span class="pill warn">kontroller</span>` : ""}${x.dup ? `<span class="pill bad">duplikat?</span>` : ""}`;
         const head = `<div class="row spread expHead" data-a="expOpen" data-i="${i}"><span class="expSum"><b>${esc(tn)}</b><span class="small muted"> · ${esc(dd)}${tl && tl.toLowerCase() !== tn.toLowerCase() ? " · " + esc(tl) : ""} · ${x.paidBy === "firma" ? "kNm betalte" : esc(who1) + " betalte"}${billed ? " · faktureres" : ""}</span> ${flags}</span><span class="row" style="gap:6px">${x.receipt ? `<span title="Kvittering lagt ved">📎</span>` : ""}<b class="num">${x.currency && x.amount === "" ? esc(x.currency) + " " + kr(x.amountCur) : kr0(num(x.amount))}</b><span class="small muted">${open ? "▴" : "▾"}</span></span></div>`;
         if (!open) return `<div class="card expRow${x.check ? " chk" : ""}">${head}</div>`;
@@ -3306,7 +3310,7 @@ async function buildExpPdf(o){
     if (first){ const meta = [["Kunde", c ? c.customer || "–" : tr && contractById(tr.contractId) ? contractById(tr.contractId).customer || "–" : "–"], ["Kontrakt / prosjekt", c ? c.name : tr && contractById(tr.contractId) ? contractById(tr.contractId).name : "Alle"], ["Person", multi ? "Flere" : personName(ls[0] ? ls[0].who : (o.who || ""))], ["Periode", tr ? `${tr.start ? fmtDateY(tr.start.slice(0,10)) : "?"} – ${tr.end ? fmtDateY(tr.end.slice(0,10)) : "?"}` : `${fmtDateY(o.from)} – ${fmtDateY(o.to)}`], (() => { const cc = c || (tr && contractById(tr.contractId)); return [ordPoLabel(cc), ordPo(cc)]; })(), ["Utskrevet", fmtDateY(todayStr())]];
       meta.forEach((m, i) => { const cx = M + (i % 3) * ((R - M) / 3), cy = y + Math.floor(i / 3) * 24; pdf.text(cx, cy + 7, m[0].toUpperCase(), {size:6.5, bold:true, color:MUTED}); pdf.text(cx, cy + 17, pdf.fit(m[1], 9.5, true, (R - M) / 3 - 8), {size:9.5, bold:true}); }); y += 56; } };
   // Kolonner: Nr, Dato, (Person), Type, Leverandør/beskrivelse, Betalt av, Kunde, MVA, Beløp
-  const cols = [["Nr", 20], ["Dato", 42]].concat(multi ? [["Person", 66]] : []).concat([["Type", 50], ["Leverandør · beskrivelse", 0], ["Betalt av", 44], ["Kunde", 34], ["MVA", 44], ["Beløp kr", 58]]);
+  const cols = [["Nr", 20], ["Dato", 46]].concat(multi ? [["Person", 92]] : []).concat([["Type", 58], ["Leverandør · beskrivelse", 0], ["Betalt av", 44], ["Kunde", 34], ["MVA", 44], ["Beløp kr", 58]]);
   const fixed = cols.reduce((a, cc) => a + cc[1], 0); cols.forEach(cc => { if (!cc[1]) cc[1] = R - M - fixed; });
   const RIGHT = new Set(["MVA", "Beløp kr"]);
   const row = (vals, opt = {}) => { if (y + 15 > BOT){ pdf.newPage(); y = M; head(false); hdr(); }
@@ -3316,7 +3320,8 @@ async function buildExpPdf(o){
   const hdr = () => { pdf.rect(M, y, R - M, 15, "#4A5866"); let x = M; cols.forEach(([nm, w]) => { if (RIGHT.has(nm)) pdf.text(x + w - 3, y + 10.5, nm, {size:7.5, bold:true, align:"right", color:"#ffffff"}); else pdf.text(x + 3, y + 10.5, nm, {size:7.5, bold:true, color:"#ffffff"}); x += w; }); y += 15; };
   head(true); hdr();
   ls.forEach(l => { const x = l.x, amt = x.currency && x.amount === "" ? "mangler NOK" : kr(num(x.amount));
-    row([String(l.n), fmtDate(l.d)].concat(multi ? [personName(l.who)] : []).concat([EXP_TYPE[x.type] || "Annet", [x.vendor, x.text, x.currency ? `${x.currency} ${kr(x.amountCur)}` : ""].filter(Boolean).join(" · ") || "Utlegg", x.paidBy === "firma" ? "Firma" : "Ansatt", expBilled(x, l.t) ? "Ja" : "Nei", x.vat !== "" && x.vat !== undefined ? kr(num(x.vat)) : "", amt + (x.check ? " *" : "")]), {color: x.check ? "#8a5a00" : undefined}); });
+    const xt = EXP_TYPE[xType(x)] || "Annet", dsc = [x.vendor, (x.text || "").trim().toLowerCase() === xt.toLowerCase() ? "" : x.text, x.currency ? `${x.currency} ${kr(x.amountCur)}` : ""].filter(Boolean).join(" · ");
+    row([String(l.n), l.d ? `${l.d.slice(8,10)}.${l.d.slice(5,7)}.${l.d.slice(2,4)}` : ""].concat(multi ? [personName(l.who)] : []).concat([xt, dsc, x.paidBy === "firma" ? "Firma" : "Ansatt", expBilled(x, l.t) ? "Ja" : "Nei", x.vat !== "" && x.vat !== undefined ? kr(num(x.vat)) : "", amt + (x.check ? " *" : "")]), {color: x.check ? "#8a5a00" : undefined}); });
   if (!ls.length) row(["", "", ...Array(cols.length - 3).fill(""), "Ingen utlegg"]);
   row(["", "Sum"].concat(Array(cols.length - 4).fill("")).concat([kr(sm.vat), kr(sm.tot)]), {bold:true, fill:"#f4f6f1"});
   y += 8;
@@ -3830,11 +3835,13 @@ document.addEventListener("click", ev => {
     case "copyPrev": { const from = el.dataset.from; let ok = true; entriesOn(from).forEach(e => { const r = strip(e); r.date = S.day; r.mob = 0; r.note = ""; r.updated = Date.now(); if (ok && persist("entries", S.day + "_" + uid(), r) === false) ok = false; }); if (ok) toast(`Kopiert fra ${fmtDate(from)}`); break; }
     case "qDel": if (el.dataset.ok){ const e = S.entries[el.dataset.id]; if (!e) return; const r = clone(e); r.lines.splice(+el.dataset.i, 1); if ((!r.lines.length ? persist("entries", el.dataset.id, null) : (r.updated = Date.now(), persist("entries", el.dataset.id, r))) !== false) toast("Linje slettet"); } else { el.dataset.ok = "1"; el.textContent = "Slett?"; } break;
     case "qExp": qExpSheet(el.dataset.id); break;
+    case "qXType": { editing.xtype = el.dataset.t; document.querySelectorAll("#qXTy .chip").forEach(b => b.setAttribute("aria-pressed", b === el ? "true" : "false")); break; }
     case "qExpSave": { if (editing.uploading){ toast("Venter på at kvitteringen lastes opp"); return; } const amt = num($("#qXA").value); if (!(amt > 0)){ toast("Fyll inn beløp"); return; }
       const tid = $("#qXT").value, tr = S.trips[tid]; if (!tr) return; const r = clone(tr); r.expenses = r.expenses || [];
       { const ai = editing.ai, same = ai && editing.aiVals === [$("#qXA").value, $("#qXDate").value, $("#qXD").value].join("|");
         const nx = Object.assign({}, ai ? {vendor: ai.vendor || "", type: ai.type || "annet", vat: ai.vat ?? "", vatRate: ai.vatRate ?? "", currency: ai.currency, amountCur: ai.amountCur, receiptPdf: ai.receiptPdf, receiptIsPdf: ai.receiptIsPdf, ai: true, check: !!same, aiNote: same ? ai.aiNote || "" : ""} : {},
           {date:$("#qXDate").value, text:$("#qXD").value.trim(), amount:amt, paidBy:$("#qXF").checked ? "firma" : "meg", rebill:$("#qXR").checked, receipt:editing.receipt || undefined, receiptUrl:editing.receiptUrl || undefined});
+        if (editing.xtype) nx.type = editing.xtype; else if (!nx.type || nx.type === "annet") nx.type = xType(nx);
         Object.keys(nx).forEach(k => nx[k] === undefined && delete nx[k]); nx.dup = dupOf(nx); r.expenses.push(nx); if (ai && nx.type === "hotell" && editing.hotel) applyHotel(r, editing.hotel); }
       r.expenses[r.expenses.length-1] = clone(r.expenses[r.expenses.length-1]); r.updated = Date.now(); if (persist("trips", tid, r) === false) return; closeSheet(); toast(`Utlegg ${kr(amt)} kr lagret`); break; }
     case "newEntry": entryEditor(null); break;
