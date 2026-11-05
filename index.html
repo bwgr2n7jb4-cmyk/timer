@@ -7,7 +7,6 @@
 <title>kNm Timer</title>
 <style>html,body{margin:0;padding:0;-webkit-text-size-adjust:100%;text-size-adjust:100%}</style>
 </head><body>
-
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
@@ -377,7 +376,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.7</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.8</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -392,7 +391,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v1.7";
+const VERSION = "v1.8";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -978,7 +977,8 @@ function periodSum(from, to, contractId, who){
   if (who === undefined) who = S.who || "";
   const list = entriesIn(from, to, contractId, who);
   const byDate = groupByDate(list);
-  const trips = tripsArr(who).filter(t => t.start && t.start.slice(0,10) <= to && (t.end || t.start).slice(0,10) >= from && (!contractId || t.contractId === contractId));
+  const wholeP = isProjRange(from, to, contractId);
+  const trips = tripsArr(who).filter(t => t.start && (wholeP ? t.contractId === contractId : t.start.slice(0,10) <= to && (t.end || t.start).slice(0,10) >= from && (!contractId || t.contractId === contractId)));
   const persons = new Set(list.map(whoOf).concat(trips.map(whoOf)));
   const tagP = who === "*" && (persons.size > 1 || [...persons].some(Boolean)), pre = w => tagP ? personName(w) + " – " : "";
   const cust = {}, pay = PAY0(), hires = {};
@@ -1005,7 +1005,7 @@ function periodSum(from, to, contractId, who){
     arr.forEach(e => { const t = entryTotals(e); hours.arbeid += t.arbeid; hours.reise += t.reise + t.mob; hours.mob += t.mob; hours.standby += t.standby; });
   });
   const tm = TM0();
-  trips.forEach(t => { const m = tripMoney(t, from, to), w = whoOf(t);
+  trips.forEach(t => { const m = wholeP ? tripMoney(t) : tripMoney(t, from, to), w = whoOf(t);
     if (w === who || (who === "*" && !w)) for (const k in tm) tm[k] += m[k]||0;
     if (isHire(w)){ const H = hireAcc(w); for (const k in H.tm) H.tm[k] += m[k]||0; }
     else { const E = empAcc(w); for (const k in E.tm) E.tm[k] += m[k]||0; }
@@ -1324,12 +1324,13 @@ function qRead(){
 }
 function qUpd(){ const el = $("#qSum"); if (el) el.textContent = hr(lineHours(qRead())) + " t"; }
 function qExpSheet(tid){
-  const d = S.day, list = (tid ? tripsArr("*") : tripsArr()).sort(byStart).reverse();
+  let d = S.day; const list = (tid ? tripsArr("*") : tripsArr()).sort(byStart).reverse();
   if (!list.length){
     openSheet(`<div class="row spread"><h2>Utlegg</h2><button class="btn ghost" data-a="close">Lukk</button></div><div class="empty">Utlegg hører til en reise. Lag reisen først, så kan du legge utlegg og kvitteringer på den.</div><button class="btn pri big" data-a="newTrip">+ Ny reise</button>`);
     return;
   }
   const def = (tid && list.some(t => t.id === tid)) ? tid : (activeTrip(d) || nextTrip(d) || list[0]).id;
+  { const dt = list.find(t => t.id === def), te = dt && (dt.end || dt.start || "").slice(0, 10); if (te && d > te) d = te; } // reisen er ferdig: foreslå siste reisedag
   editing = {kind:"qexp", receipt:null, receiptUrl:null, uploading:false};
   openSheet(`
     <div class="row spread"><h2>Utlegg</h2><button class="btn ghost" data-a="close">Lukk</button></div>
@@ -1476,16 +1477,20 @@ function perRange(){
   if (P.kind === "project"){
     const c = contractById(P.contractId);
     if (!c) return {from:S.week, to:addDays(S.week,6), title:"Velg kontrakt", c:null};
-    const dates = Object.values(S.entries).filter(e => e.contractId === c.id).map(e => e.date)
-      .concat(...Object.values(S.trips).filter(x => x.contractId === c.id && x.start).map(x => [x.start.slice(0,10), (x.end || x.start).slice(0,10)])).sort();
-    let f = projStart(c) || dates[0] || t, to = projEnd(c) || dates[dates.length-1] || f;
-    if (to < f) to = f;
-    return {from:f, to, title:c.name, c, planned: !!(c.startDate && c.endDate)};
+    const pr = projRangeOf(c);
+    return {from:pr.from, to:pr.to, title:c.name, c, planned: !!(c.startDate && c.endDate)};
   }
   if (P.kind === "year"){ const y = P.year || +t.slice(0,4); return {from:`${y}-01-01`, to:`${y}-12-31`, title:String(y)}; }
   if (P.kind === "custom"){ const f = P.from || t; let to = P.to || f; if (to < f) to = f; return {from:f, to, title:"Egen periode"}; }
   return {from:S.week, to:addDays(S.week,6), title:`Uke ${isoWeek(S.week).w}`};
 }
+// Prosjektperioden slik Timeliste/Grunnlag viser den («Prosjekt»)
+function projRangeOf(c){ const t = todayStr(); if (!c) return null;
+  const dates = Object.values(S.entries).filter(e => e.contractId === c.id).map(e => e.date)
+    .concat(...Object.values(S.trips).filter(x => x.contractId === c.id && x.start).map(x => [x.start.slice(0,10), (x.end || x.start).slice(0,10)])).sort();
+  let f = projStart(c) || dates[0] || t, to = projEnd(c) || dates[dates.length-1] || f; if (to < f) to = f; return {from: f, to}; }
+// Hele prosjektet valgt: alle reiser og utlegg på prosjektet tas med, også utlegg datert etter prosjektslutt (kvittering registrert sent)
+const isProjRange = (from, to, cid) => { const r = cid && projRangeOf(contractById(cid)); return !!r && r.from === from && r.to === to; };
 const perContract = () => S.per.contractId && contractById(S.per.contractId) ? S.per.contractId : "";
 const rowEntries = d => { const c = perContract(); return entriesOn(d).filter(e => !c || e.contractId === c); };
 function perSummary(r){
@@ -2682,11 +2687,13 @@ function vRapport(){
   const rr = perRange(), pcn = perControls(rr);
   S.report = {from:rr.from, to:rr.to, contractId: perContract()};
   const R = S.report, ps = periodSum(R.from, R.to, R.contractId, "*");
+  const lateX = R.contractId && isProjRange(R.from, R.to, R.contractId) ? expLinesFor({from: R.from, to: R.to, contractId: R.contractId, who: "*"}).filter(l => l.d > R.to || l.d < R.from) : [];
   const custBlocks = Object.entries(ps.cust).map(([cid, c]) => {
     const items = Object.values(c.items);
     return `<section class="card cust" style="display:grid;gap:10px">
       <div class="row spread"><div><span class="label cust"><span class="tag cust">Kunde</span> Fakturagrunnlag</span><h3>${esc(c.contract ? c.contract.name : "Uten kontrakt")}</h3><span class="small muted">${c.contract ? esc([c.contract.customer, ordPoText(c.contract)].filter(Boolean).join(" · ")) : "Føringer uten kontrakt faktureres ikke"}</span></div>
       ${R.contractId ? "" : `<details class="ddm"><summary class="btn sm">Eksporter ▾</summary><div class="ddmBody">${c.contract ? exportBar(R.from, R.to, cid, "*") : ""}<button class="btn sm" data-a="csvCust" data-id="${esc(cid)}">CSV fakturagrunnlag</button></div></details>`}</div>
+      ${lateX.length && c.contract && c.contract.id === R.contractId ? `<p class="small" style="margin:0;color:var(--warn)"><b>${lateX.length} ${lateX.length === 1 ? "utlegg" : "utlegg"} datert utenfor prosjektperioden</b> er tatt med fordi de ligger på prosjektets reiser: ${lateX.map(l => `${esc(personName(l.who).split(" ")[0])} ${fmtDate(l.d)} ${esc(EXP_TYPE[xType(l.x)] || "utlegg").toLowerCase()} ${kr(num(l.x.amount))}`).join(", ")}.</p>` : ""}
       <div class="tw"><table><thead><tr><th>Post</th><th class="n">Antall</th><th>Enhet</th><th class="n">Sats</th><th class="n">Beløp</th></tr></thead><tbody>
       ${custGroups(items).map(g => `<tr><td>${esc(g.label)}</td><td class="n">${g.ut ? g.qty : hr(g.qty)}</td><td>${esc(g.unit)}</td><td class="n">${g.rates.size === 1 && !g.ut ? kr([...g.rates][0] / 100) : ""}</td><td class="n">${kr(g.amount)}</td></tr>`).join("")}
       <tr class="sum"><td colspan="4">Sum eks. mva</td><td class="n">${kr(c.total)}</td></tr></tbody></table></div>
@@ -3316,7 +3323,8 @@ function expLinesFor({from, to, contractId, who, tripId}){
   const trips = Object.entries(S.trips).map(([id, t]) => Object.assign({id}, t))
     .filter(t => tripId ? t.id === tripId : (who === "*" || whoOf(t) === (who || "")) && (!contractId || t.contractId === contractId));
   const out = [];
-  trips.forEach(t => (t.expenses || []).forEach(x => { const d = x.date || (t.start || "").slice(0, 10); if (!tripId && (d < from || d > to)) return; out.push({t, x, d, who: whoOf(t)}); }));
+  const wholeP = !tripId && isProjRange(from, to, contractId);
+  trips.forEach(t => (t.expenses || []).forEach(x => { const d = x.date || (t.start || "").slice(0, 10); if (!tripId && !wholeP && (d < from || d > to)) return; out.push({t, x, d, who: whoOf(t)}); }));
   return out.sort((a, b) => a.d < b.d ? -1 : a.d > b.d ? 1 : 0).map((l, i) => Object.assign(l, {n: i + 1}));
 }
 const expSums = ls => ls.reduce((a, l) => { const v = num(l.x.amount); a.tot += v; if (l.x.paidBy === "firma") a.firm += v; else a.ref += v; if (expBilled(l.x, l.t)) a.rebill += v; a.vat += num(l.x.vat); if (l.x.check) a.chk++; if (l.x.currency && l.x.amount === "") a.noNok++; return a; }, {tot:0, ref:0, firm:0, rebill:0, vat:0, chk:0, noNok:0});
@@ -4189,5 +4197,6 @@ function vSend(){
 boot();
 })();
 </script>
+
 
 </body></html>
