@@ -222,6 +222,13 @@ td.act{ white-space:nowrap; text-align:right }
 .anbsum .t-warn{ background:var(--warn-soft); box-shadow:inset 4px 0 0 var(--warn) } .anbsum .t-warn .label{ color:var(--warn) }
 .anbsum .t-ok{ background:var(--accent-soft); box-shadow:inset 4px 0 0 var(--accent) } .anbsum .t-ok .label{ color:var(--accent-ink) }
 .anbsum .t-bad{ background:var(--bad-soft); box-shadow:inset 4px 0 0 var(--bad) } .anbsum .t-bad .label{ color:var(--bad) }
+.anbsum .t-n{ background:var(--surface); border:1px solid var(--line) }
+.anbfk .tile .v{ font-size:1.25rem }
+.achips{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px }
+.achip{ background:var(--surface2); border-radius:8px; padding:7px 10px; display:grid; gap:1px; font-size:.8rem; color:var(--muted); min-width:0 }
+.achip b{ color:var(--fg); font-size:.95rem }
+.achip .num{ white-space:nowrap }
+@media (max-width:560px){ .anbsum.anbfk .tiles{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px } .anbfk .tile{ padding:8px } .anbfk .tile .v{ font-size:1.05rem } .anbfk .tile small{ font-size:.68rem } .achips{ gap:6px } .achip{ padding:6px 8px; font-size:.72rem } .achip b{ font-size:.85rem } }
 .dbm{ position:relative; height:12px; background:var(--surface2); border-radius:6px } .dbm i{ position:absolute; left:0; top:0; bottom:0; border-radius:6px; background:var(--warn) }
 .dbm.ok i{ background:var(--accent) } .dbm.warn i{ background:var(--warn) } .dbm.bad i{ background:var(--bad) } .dbm .tg{ position:absolute; top:-5px; bottom:-5px; width:18px; margin-left:-9px; cursor:ew-resize; touch-action:none } .dbm .tg::before{ content:""; position:absolute; left:8px; top:0; bottom:0; width:2px; background:var(--fg) } .dbm .tg::after{ content:""; box-sizing:border-box; position:absolute; left:1px; top:50%; width:16px; height:16px; margin-top:-8px; border-radius:50%; background:var(--fg); border:3px solid var(--surface); box-shadow:0 0 0 1px var(--fg) } .dbm .tg:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; border-radius:4px }
 .anbsum .hb{ display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) 3.6em; gap:8px; align-items:center; font-size:.86rem } .anbsum .hb b{ text-align:right }
@@ -376,7 +383,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.8</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.9</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -391,7 +398,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v1.8";
+const VERSION = "v1.9";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -712,9 +719,8 @@ function customerCalc(date, contract, entries, ordBefore, daysBefore){
   if (dagDay){
     const inc = num(contract.ordThreshold) || 12, lim = num(contract.offLimit) || offLimit();
     // Langt opphold: etter grensen (standard 168 t) faktureres døgnet som overtid × ordinære timer (f.eks. 12 × 1 280) i stedet for dagraten
-    // Døgnteller (v27.4): de første lim/inc døgnene (168/12 = 14) får hel dagrate, deretter hele døgn som overtid × inc. Ingen brøkdeler.
-    const dayLim = Math.max(1, Math.round(lim / inc));
-    const left = typeof daysBefore === "number" ? (daysBefore < dayLim ? Infinity : 0) : ordBefore !== undefined && ordBefore !== null ? Math.max(0, lim - ordBefore) : Infinity;
+    // v29.8: grensen telles i ordinære timer (som lønn): dagrate til 168 ordinære timer er nådd. Døgnet som passerer grensen får delvis dagrate + resten som overtid.
+    const left = ordBefore !== undefined && ordBefore !== null ? Math.max(0, lim - ordBefore) : Infinity;
     if (left >= inc) add("dag","Dagrate offshore",1,"døgn",num(contract.dayRate));
     else { if (left > 0) add("dag","Dagrate offshore",left / inc,"døgn",num(contract.dayRate)); add("dagls","Langt opphold (overtid i stedet for dagrate)",inc - left,"t",num(contract.rOT)); res.longStay = true; }
     const otD = Math.max(0, t.arbeid - inc), holD = !!holidayName(date), rHOd = num(contract.rHelligOT);
@@ -1136,7 +1142,7 @@ function doRender(){
   const mode = applyMode();
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === S.tab)));
   const m = $("#main");
-  const V = mode === "mobile" ? {idag:vIdag, uke:vUkeMob, reise:vReiseMob, mer: FIELD ? vSend : vMer} : {uke:vUkeDesk, reiser:vReiser, anbud:vAnbud, rapport:vRapport, oppsett:vOppsett, tid:vArbeidstid};
+  const V = mode === "mobile" ? {idag:vIdag, uke:vUkeMob, reise:vReiseMob, mer: FIELD ? vSend : vMer} : {uke:vUkeDesk, reiser:vReiser, anbud:vAnbud, rapport:vRapport, oppsett:vOppsett, tid:vArbeidstid, resultat:vResultat};
   // Sist valgte prosjekt huskes i denne nettleseren og velges igjen ved åpning
   if (!S.projRestored && (S.settings.contracts || []).some(c => statusOf(c) !== "mal")){ S.projRestored = true; const id = ls.get(PROJ_KEY), c0 = id && contractById(id);
     if (c0 && statusOf(c0) !== "mal"){ S.anbSel = id; S.pickedFrom = id; syncPick(id); } }
@@ -1163,7 +1169,7 @@ let mobLight = !!ls.get(LIGHT_KEY);
 const mq = window.matchMedia ? window.matchMedia("(min-width: 900px)") : {matches:true};
 const currentMode = () => modePref === "auto" ? (mq.matches ? "desktop" : "mobile") : modePref;
 const TABS = { mobile:[["idag","Før timer"],["uke","Timeliste"],["reise","Reise"],["mer", FIELD ? "Send" : "Oversikt"]],
-               desktop:[["anbud","Anbud"],["reiser","Reiser"],["uke","Timeliste"],["rapport","Grunnlag"],["tid","Overtid og hvile"],["oppsett","Innstillinger"]] };
+               desktop:[["anbud","Anbud"],["reiser","Reiser"],["uke","Timeliste"],["rapport","Grunnlag"],["resultat","Resultat"],["tid","Overtid og hvile"],["oppsett","Innstillinger"]] };
 let lastMode = null;
 const TAB_KEY = "knm_tb_tab_";
 function applyMode(){
@@ -2081,7 +2087,7 @@ function planCalc(c){
     Object.keys(rc).forEach(k => cu[k] += rc[k]*n*z); Object.keys(ro).forEach(k => co[k] += ro[k]*n*z);
     hours.work += H*rdays.length*n; hours.mob += mobH*n*z; hours.standby += sb*n; crew += n; personDays += rdays.length*n; if (hire) hiredH += (H*rdays.length + mobH + sb)*n;
     otHours += rdays.reduce((a,d) => a + Math.max(0, H - thrC), 0) * n;
-    return {i, n, role: r.role, hire: hire ? hire.name : "", tb, ta, home, off, autoHome, trips, legs, mobH, travelH: num(r.travelH), diet, dietKr: dOut, dParts, autoDiet, manualDiet: !(r.diet === "" || r.diet === undefined || r.diet === null), nights, km, kmTrip: car === "ingen" ? 0 : num(r.km), toll: num(r.toll), fare: num(r.fare), hotel: num(r.hotel), other: num(r.other), car, cust:rcT, cost:roT,
+    return {i, n, role: r.role, hire: hire ? hire.name : "", tb, ta, home, off, autoHome, trips, legs, mobH, travelH: num(r.travelH), diet, dietKr: dOut, dParts, autoDiet, manualDiet: !(r.diet === "" || r.diet === undefined || r.diet === null), nights, km, kmTrip: car === "ingen" ? 0 : num(r.km), toll: num(r.toll), fare: num(r.fare), hotel: num(r.hotel), other: num(r.other), car, cust:rcT, cost:roT, fastKr:(ro.fast || 0) * n * z, sosKr:0,
       D: Dr, own, days: rdays.length, away: aw, daily};
   });
   const custTotal = Object.values(cu).reduce((a,b) => a + b, 0), costTotal = Object.values(co).reduce((a,b) => a + b, 0);
@@ -2221,16 +2227,91 @@ function planActual(c){
   const firmPaid = (ps.trips || []).reduce((a, t) => { const m = tripMoney(t, aF, aT); return a + Math.max(0, m.tollFerry + m.exp - m.refund); }, 0);
   const cost = H.reduce((a, h) => a + h.invoice, 0) + empPay + E.reduce((a, e) => a + e.tm.toEmployee, 0) + fast + (empPay + fast) * sosP + firmPaid;
   const costPlan = b ? b.cost : p.costTotal, custPlan = b ? b.cust : p.custTotal;
-  return {p, cust, cost, custPlan, costPlan, rows:[["Arbeidstimer", b ? b.work : p.hours.work, ps.hours.arbeid + ps.hours.standby], ["Mob./reisetimer", b ? b.mob : p.hours.mob, ps.hours.reise], ["Fakturagrunnlag kr", custPlan, cust, 1], ["Kost kr", costPlan, cost, 1], ["Reisekost personell kr", b ? b.travel : p.cost.diet + p.cost.km + p.cost.exp, travel, 1]]};
+  return {p, ps, aF, aT, cust, cost, custPlan, costPlan, rows:[["Arbeidstimer", b ? b.work : p.hours.work, ps.hours.arbeid + ps.hours.standby], ["Mob./reisetimer", b ? b.mob : p.hours.mob, ps.hours.reise], ["Fakturagrunnlag kr", custPlan, cust, 1], ["Kost kr", costPlan, cost, 1], ["Reisekost personell kr", b ? b.travel : p.cost.diet + p.cost.km + p.cost.exp, travel, 1]]};
+}
+/* ============ Resultat: fortjeneste per prosjekt, kilde og person ============ */
+// Fortjeneste = fakturert − direkte kost (samme kost som «Anbud mot faktisk»), før faste kostnader.
+const RES_CAT = it => { const k = String(it.g || "").split("|")[0]; return ["utlegg","diett","km"].includes(k) ? "utl" : ["reise","mob","mobt"].includes(k) ? "mob" : "arb"; };
+function resultCalc(c){
+  const pa = planActual(c), ps = pa.ps, p = pa.p, sosP = num(S.settings.pay.socialPct) / 100;
+  const P = {}, pe = w => P[w] = P[w] || {w, hire: w !== "?" && isHire(w), h:0, rev:{arb:0, mob:0, utl:0}, cost:{arb:0, mob:0, utl:0}};
+  Object.values(ps.cust).forEach(acc => Object.values(acc.items).forEach(it => { pe(it.who || "").rev[RES_CAT(it)] += it.amount || 0; }));
+  ps.list.forEach(e => { const t = entryTotals(e); pe(whoOf(e)).h += t.arbeid + t.standby + t.reise + t.mob; });
+  Object.values(ps.hires).forEach(H => { const x = pe(H.id); x.cost.arb += H.total - H.krReise; x.cost.mob += H.krReise; x.cost.utl += H.tm.toEmployee; });
+  const fastBy = {}; crewRows(c).forEach((r, i) => { const pr = p.rows[i]; if (!pr || !pr.fastKr) return; const w = crewWho(r); const k = w === null ? "?" : w; fastBy[k] = (fastBy[k] || 0) + pr.fastKr; });
+  Object.values(ps.emps).forEach(E => { const x = pe(E.id), f = fastBy[E.id] || 0; delete fastBy[E.id];
+    x.cost.arb += (E.pay.total - E.pay.krReise + f) * (1 + sosP); x.cost.mob += E.pay.krReise * (1 + sosP); x.cost.utl += E.tm.toEmployee;
+    // Reisetid innenfor arbeidstid er dekket av fastlønnen: flytt den andelen (timelønn + sosiale) fra Arbeid til Mob./reise
+    const fr = Math.min(x.cost.arb, (E.pay.reiseFree || 0) * withEmp(E.id, hourlyRate) * (1 + sosP)); x.cost.arb -= fr; x.cost.mob += fr; x.freeH = (x.freeH || 0) + (E.pay.reiseFree || 0); });
+  Object.entries(fastBy).forEach(([w, f]) => { pe(w).cost.arb += f * (1 + sosP); });
+  (ps.trips || []).forEach(t => { const m = tripMoney(t, pa.aF, pa.aT); pe(whoOf(t)).cost.utl += Math.max(0, m.tollFerry + m.exp - m.refund); });
+  const sum = o => o.arb + o.mob + o.utl, cats = {arb:{rev:0, cost:0}, mob:{rev:0, cost:0}, utl:{rev:0, cost:0}};
+  const persons = Object.values(P).map(x => { ["arb","mob","utl"].forEach(k => { cats[k].rev += x.rev[k]; cats[k].cost += x.cost[k]; }); return Object.assign(x, {revT: sum(x.rev), costT: sum(x.cost)}); })
+    .filter(x => x.revT || x.costT || x.h).sort((a, b) => (b.revT - b.costT) - (a.revT - a.costT));
+  const fixed = mobModeOf(c) === "fixed"; // Fastpris mob./demob.: reisekost (utlegg, diett, km) vises under Mob./reise
+  if (fixed){ cats.mob.rev += cats.utl.rev; cats.mob.cost += cats.utl.cost; cats.utl = {rev:0, cost:0}; }
+  const mP = pa.custPlan - pa.costPlan;
+  const freeH = Object.values(P).reduce((a, x) => a + (x.freeH || 0), 0);
+  return {c, pa, fixed, freeH, rev: pa.cust, cost: pa.cost, db: pa.cust - pa.cost, pct: pa.cust ? (pa.cust - pa.cost) / pa.cust : 0, planPct: pa.custPlan ? mP / pa.custPlan : 0, planDb: mP, hours: persons.reduce((a, x) => a + x.h, 0), cats, persons};
+}
+function vResultat(){
+  const all = (S.settings.contracts || []).filter(c => c.startDate && ["aktiv","avsluttet"].includes(statusOf(c)));
+  const yr = c => (projStart(c) || c.startDate || "").slice(0, 4), years = [...new Set(all.map(yr))].filter(Boolean).sort().reverse();
+  if (S.resYear === undefined || (S.resYear !== "*" && !years.includes(S.resYear))) S.resYear = years.includes(todayStr().slice(0, 4)) ? todayStr().slice(0, 4) : (years[0] || "*");
+  const cs = all.filter(c => S.resYear === "*" || yr(c) === S.resYear), R = cs.map(resultCalc).sort((a, b) => (projStart(b.c) || b.c.startDate).localeCompare(projStart(a.c) || a.c.startDate));
+  if (!R.some(r => r.c.id === S.resSel)) S.resSel = R[0] ? R[0].c.id : null;
+  const T = R.reduce((a, r) => ({rev: a.rev + r.rev, cost: a.cost + r.cost, h: a.h + r.hours}), {rev:0, cost:0, h:0}), Tdb = T.rev - T.cost, Tpct = T.rev ? Tdb / T.rev : 0;
+  const pc = v => `${Math.round(v * 100)} %`, col = v => v < 0 ? ` style="color:var(--bad);font-weight:700"` : "";
+  const dbCol = r => { const k = dbClass(r.db, r.rev, r.planPct); return k === "bad" ? "var(--bad)" : k === "warn" ? "var(--warn)" : "var(--accent-ink)"; };
+  const sel = R.find(r => r.c.id === S.resSel);
+  const CAT = [["arb","Arbeid (timer, dagrate, standby)"],["mob","Mob./reise"],["utl","Utlegg, diett og km"]];
+  return `
+  <div class="row spread pageHd"><h2>Resultat</h2>${years.length > 1 ? `<div class="seg">${years.map(y => `<button class="${S.resYear === y ? "on" : ""}" data-a="resYear" data-y="${y}">${y}</button>`).join("")}<button class="${S.resYear === "*" ? "on" : ""}" data-a="resYear" data-y="*">Alle</button></div>` : ""}</div>
+  ${!R.length ? `<section class="card"><div class="empty">Ingen aktive eller avsluttede prosjekter${S.resYear !== "*" ? " i " + S.resYear : ""}.</div></section>` : `
+  <section class="card" style="display:grid;gap:12px">
+    <div class="anbsum anbfk"><div class="tiles">
+      <div class="tile t-n"><span class="label">Fakturert${S.resYear !== "*" ? " " + S.resYear : ""}</span><span class="v num">${kr0(T.rev)}</span><small>${R.length} ${R.length === 1 ? "prosjekt" : "prosjekter"}</small></div>
+      <div class="tile t-n"><span class="label">Kost</span><span class="v num">${kr0(T.cost)}</span><small>${hr(T.h)} timer</small></div>
+      <div class="tile t-${Tdb < 0 ? "bad" : "ok"}"><span class="label">Fortjeneste</span><span class="v num">${kr0(Tdb)}</span><span class="small" style="font-weight:700;color:${Tdb < 0 ? "var(--bad)" : "var(--accent-ink)"}">${pc(Tpct)}${T.h ? ` · ${kr0(Tdb / T.h)} kr/t` : ""}</span></div>
+    </div></div>
+    <div class="tw"><table class="anbt"><thead><tr><th>Prosjekt</th><th>Status</th><th class="n">Fakturert</th><th class="n">Kost</th><th class="n">Fortjeneste</th><th class="n">Fortjeneste %</th><th class="n">Anbud %</th></tr></thead><tbody>
+      ${R.map(r => `<tr class="click ${r.c.id === S.resSel ? "sel" : ""}" data-a="resSel" data-id="${esc(r.c.id)}"><td><b>${esc(r.c.name)}</b></td><td>${statusPill(statusOf(r.c))}</td><td class="n num">${kr0(r.rev)}</td><td class="n num">${kr0(r.cost)}</td><td class="n num"${col(r.db)}><b>${kr0(r.db)}</b></td><td class="n num" style="font-weight:700;color:${dbCol(r)}">${r.rev ? pc(r.pct) : "–"}</td><td class="n num muted">${pc(r.planPct)}</td></tr>`).join("")}
+    </tbody><tfoot><tr><td><b>Sum</b></td><td></td><td class="n num"><b>${kr0(T.rev)}</b></td><td class="n num"><b>${kr0(T.cost)}</b></td><td class="n num"${col(Tdb)}><b>${kr0(Tdb)}</b></td><td class="n num"><b>${pc(Tpct)}</b></td><td></td></tr></tfoot></table></div>
+    <p class="small muted" style="margin:0">Fortjeneste = fakturert minus direkte kost, før faste kostnader (verksted, biler, admin). Hele prosjektperioden. Trykk på et prosjekt for detaljer.</p>
+  </section>
+  ${sel ? `<div class="anbGrid">
+    <section class="card" style="display:grid;gap:10px;align-content:start"><span class="label">Hvor fortjenesten kommer fra · ${esc(sel.c.name)}</span>
+      <div class="tw"><table><thead><tr><th>Post</th><th class="n">Fakturert</th><th class="n">Kost</th><th class="n">Fortjeneste</th></tr></thead><tbody>
+        ${CAT.map(([k, l]) => { const x = sel.cats[k]; if (k === "mob" && sel.fixed) l = "Mob./demob. fastpris inkl. utlegg, diett og km"; return x.rev || x.cost ? `<tr><td>${l}</td><td class="n num">${kr0(x.rev)}</td><td class="n num">${kr0(x.cost)}</td><td class="n num"${col(x.rev - x.cost)}><b>${kr0(x.rev - x.cost)}</b></td></tr>` : ""; }).join("")}
+      </tbody><tfoot><tr><td><b>Sum</b></td><td class="n num"><b>${kr0(sel.rev)}</b></td><td class="n num"><b>${kr0(sel.cost)}</b></td><td class="n num"${col(sel.db)}><b>${kr0(sel.db)}</b></td></tr></tfoot></table></div>
+      <p class="small muted" style="margin:0">Arbeid: ansatte med fastlønn som i anbudet og sosiale kostnader. Utlegg: alt kNm har betalt eller refundert.${sel.freeH ? ` Reisetid innenfor arbeidstid (${hr(sel.freeH)} t) er dekket av fastlønnen, men er regnet som kost under ${sel.fixed ? "mob./demob." : "mob./reise"} med timelønn og sosiale kostnader.` : ""}${sel.fixed ? " Fastpris: reisekost står under mob./demob. for å vise om fastprisen dekker reisen. Fakturering er uendret." : ""}</p>
+    </section>
+    <section class="card" style="display:grid;gap:10px;align-content:start"><span class="label">Per person · ${esc(sel.c.name)}</span>
+      <div class="tw"><table><thead><tr><th>Person</th><th class="n">Timer</th><th class="n">Fakturert</th><th class="n">Kost</th><th class="n">Fortjeneste</th><th class="n">Per time</th></tr></thead><tbody>
+        ${sel.persons.map(x => { const d = x.revT - x.costT; return `<tr><td><b>${x.w === "?" ? "Ikke tildelt" : esc(personName(x.w))}</b> <span class="small muted">${x.w === "?" ? "fastlønn i anbud" : x.hire ? "innleid" : "ansatt"}</span></td><td class="n num">${hr(x.h)}</td><td class="n num">${kr0(x.revT)}</td><td class="n num">${kr0(x.costT)}</td><td class="n num"${col(d)}><b>${kr0(d)}</b></td><td class="n num">${x.h ? kr0(d / x.h) : "–"}</td></tr>`; }).join("")}
+      </tbody></table></div>
+      <p class="small muted" style="margin:0">Timer = arbeid, standby og reise/mob.</p>
+    </section></div>` : ""}`}`;
 }
 function planActualCard(c){
   if (!c || !c.startDate) return "";
-  const pa = planActual(c);
+  const pa = planActual(c), R = pa.rows, kr = v => kr0(v);
+  // Nøkkeltall: grønn = bra for kNm, rød = dårlig
+  const dPct = (act, plan) => plan ? Math.round((act / plan - 1) * 100) : null;
+  const arrow = (act, plan, goodUp) => { const d = dPct(act, plan); if (d === null || !act) return `<span class="small muted">–</span>`;
+    const good = d === 0 ? null : (d > 0) === goodUp;
+    return `<span class="small" style="font-weight:700;color:${good === null ? "var(--muted)" : good ? "var(--accent-ink)" : "var(--bad)"}">${d > 0 ? "▲" : d < 0 ? "▼" : "="} ${Math.abs(d)} %</span>`; };
+  const m = pa.cust - pa.cost, pct = pa.cust ? m / pa.cust : 0, mP = pa.custPlan - pa.costPlan, pP = pa.custPlan ? mP / pa.custPlan : 0, cls = pa.cust ? dbClass(m, pa.cust, pP) : "ok";
+  const dbCol = cls === "bad" ? "var(--bad)" : cls === "warn" ? "var(--warn)" : "var(--accent-ink)";
+  const tile = (lab, act, plan, extra, k) => `<div class="tile ${k || "t-n"}"><span class="label">${lab}</span><span class="v num">${kr(act)}</span><small class="num">anbud ${kr(plan)}</small>${extra}</div>`;
+  const chip = (lab, r, unit) => `<div class="achip"><span>${lab}</span><span class="num"><b>${r[3] ? kr(r[2]) : hr(r[2])}</b> / ${r[3] ? kr(r[1]) : hr(r[1])}${unit}</span></div>`;
   return `<section class="card" style="display:grid;gap:10px"><div class="row spread"><span class="label">Anbud mot faktisk</span></div>
-    ${pa.rows.map(r => { const pc = r[1] ? Math.round(r[2]/r[1]*100) : 0, f = v => r[3] ? kr0(v) : hr(v);
-      return `<div class="meter ${pc > 100 ? "x" : pc > 85 ? "w" : ""}"><div class="row spread small"><span>${r[0]}</span><span class="num"><b>${f(r[2])}</b> / ${f(r[1])}</span></div><div class="bar"><i style="width:${Math.min(100, pc)}%"></i></div></div>`; }).join("")}
-    ${(() => { const m = pa.cust - pa.cost, pct = pa.cust ? m / pa.cust : 0, mP = pa.custPlan - pa.costPlan, pP = pa.custPlan ? mP / pa.custPlan : 0, cls = dbClass(m, pa.cust, pP), up = Math.round(pct * 100) >= Math.round(pP * 100);
-      return pa.cust ? `<div class="anbsum"><div class="tiles" style="grid-template-columns:1fr"><div class="tile t-${cls}"><span class="label">Dekningsbidrag faktisk</span><span class="v num">${kr0(m)}</span><span class="small" style="font-weight:600;color:${cls === "bad" ? "var(--bad)" : cls === "warn" ? "var(--warn)" : "var(--accent-ink)"}">${up ? "▲" : "▼"} ${Math.round(pct * 100)} % · anbud ${Math.round(pP * 100)} % (${kr0(mP)})</span></div></div></div>` : ""; })()}
+    <div class="anbsum anbfk"><div class="tiles">
+      ${tile("Fakturert", pa.cust, pa.custPlan, arrow(pa.cust, pa.custPlan, true))}
+      ${tile("Kost", pa.cost, pa.costPlan, arrow(pa.cost, pa.costPlan, false))}
+      ${tile("DB", m, mP, pa.cust ? `<span class="small" style="font-weight:700;color:${dbCol}">${Math.round(pct * 100)} % (${Math.round(pP * 100)} %)</span>` : `<span class="small muted">–</span>`, "t-" + cls)}
+    </div>
+    <div class="achips">${chip("Arbeid", R[0], " t")}${chip("Mob./reise", R[1], " t")}${chip("Reisekost", R[4], "")}</div></div>
     <p class="small muted" style="margin:0">Faktisk i prosjektperioden / ${c.bid ? "låst anbud" : "anbud"}. Kost: innleide som fakturagrunnlag innleid, ansatte med fastlønn som i anbudet, og alle utlegg uansett hvem som betalte.</p></section>`;
 }
 function bindPlan(){
@@ -3784,6 +3865,8 @@ document.addEventListener("click", ev => {
     case "copyFrom": copyFromSheet(); break;
     case "copyDo": copyDo(); break;
     case "amlWho": S.amlWho = el.dataset.w || ""; render(); break;
+    case "resSel": S.resSel = el.dataset.id; render(); break;
+    case "resYear": S.resYear = el.dataset.y; render(); break;
     case "goTid": S.tab = "tid"; ls.set(TAB_KEY + currentMode(), S.tab); render(); window.scrollTo(0,0); break;
     case "nameSave": { const v = ($("#nnName").value || "").trim(); if (!v){ toast("Skriv et prosjektnavn, eller trykk «Hopp over»"); break; } const s2 = clone(S.settings), c2 = s2.contracts.find(x => x.id === editing.id); if (c2){ c2.name = v; persist("settings","app",s2); } closeSheet(); render(); toast(`«${v}» er laget – fyll inn kunde og satser under «Kunde og satser»`); break; }
     case "malEdit": { S.malEdit = el.dataset.id; const inSheet = editing && editing.kind === "contract"; if (inSheet){ closeSheet(); contractEditor(el.dataset.id); } render(); toast("Malen kan nå endres – trykk «Ferdig med malen» når du er ferdig"); break; }
@@ -4018,7 +4101,7 @@ document.addEventListener("focusout", ev => { const el = ev.target; if (!el || !
   setTimeout(() => { const box = el.closest(".cxl"); if (box && box.contains(document.activeElement)) return; if (el.value !== "") return;
     const c = anbudRead(); if (!c) return; const r = c.planCrewRows[+el.dataset.ce]; if (!r) return; const j = +el.dataset.cj; if (r.exps[j] && (r.exps[j].a === "" || !num(r.exps[j].a))){ r.exps.splice(j, 1); anbudSave(c); render(); } }, 0); });
 
-if (location.protocol === "file:") window.__knm = {S, trashSheet, recentOverlay, recentW, buildPayPdf, buildHirePdf, logoFixOnce, travelCrm, syncCrewTrips, crewTripPlan, parseReceiptText, interpretReceipt, readOneReceipt, buildExpPdf, expLinesFor, applyHotel, matchPerson, bulkReceipts, amlCalc, scanReceipt, buildPlanPdf, statusOf, projectOutside, perRange, buildPdf, buildXlsx, exportXlsx, planCalc, isLocked, customerCalc, payCalc, tripDiet, tripMoney, holidays, persist, amlStats, periodSum, render};
+if (location.protocol === "file:") window.__knm = {S, resultCalc, planActual, trashSheet, recentOverlay, recentW, buildPayPdf, buildHirePdf, logoFixOnce, travelCrm, syncCrewTrips, crewTripPlan, parseReceiptText, interpretReceipt, readOneReceipt, buildExpPdf, expLinesFor, applyHotel, matchPerson, bulkReceipts, amlCalc, scanReceipt, buildPlanPdf, statusOf, projectOutside, perRange, buildPdf, buildXlsx, exportXlsx, planCalc, isLocked, customerCalc, payCalc, tripDiet, tripMoney, holidays, persist, amlStats, periodSum, render};
 /* ============ kNm Timer (mobilapp uten Claude) og innlesing i kNm Prosjekt ============
    Samme kode brukes i begge filer. FIELD = true i kNm Timer.
    Lenke: <app>#k=<base64url(gzip(JSON))>  · Fil fra appen: {fmt:"knm-timer", v:1, ...} */
