@@ -172,6 +172,7 @@ body.desk nav.tabs{ overflow-x:auto }
 body.desk nav.tabs button{ font-family:var(--f-display); font-weight:600; font-size:1.02rem }
 body.desk main, body.desk .top-in, body.desk nav.tabs{ max-width:1560px }
 body.desk .sheet:has(.tripCols){ max-width:1200px }
+table.dietT .d-date{ display:block; font-size:.95rem; font-weight:700; color:var(--fg); white-space:nowrap } table.dietT .d-sub{ display:block; font-size:.72rem; color:var(--muted); font-weight:500 }
 table.dietT th, table.dietT td{ padding:6px 3px } table.dietT th{ font-size:.68rem; letter-spacing:0 } table.dietT .d-lab{ min-width:4.5em }
 table.dietT select.wide{ width:10.6em } table.dietT select{ min-width:0 !important; width:7.4em; padding:4px 6px } table.dietT .d-amt{ white-space:nowrap }
 body.desk .tripCols{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.1fr); grid-template-areas:"tf tf" "tk td" "tu td" "ts ts"; grid-template-rows:auto auto 1fr auto; gap:18px 22px; align-items:start }
@@ -383,7 +384,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v1.9</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.3</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -398,7 +399,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v1.9";
+const VERSION = "v2.3";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -508,6 +509,7 @@ function persist(kind, id, data){
   if (kind === "settings") S.settings = data;
   else if (data === null){ const old = S[kind][id]; delete S[kind][id]; if (old && !FIELD && (kind === "entries" || kind === "trips")) trashPut(kind, id, old); }
   else S[kind][id] = data;
+  if (kind === "entries") autoExtendSoon();
   if (FIELD && kind !== "settings") fieldTomb(kind, data === null ? id : undefined);
   saveCache();
   if (S.mode === "db"){
@@ -606,7 +608,7 @@ async function boot(){
     qs.docs.forEach(d => { next[d.id] = clone(d.data()); });
     recentOverlay(kind, next);
     for (const q of queue) if (q.kind === kind){ if (q.data === null) delete next[q.id]; else next[q.id] = q.data; }
-    S[kind] = next; if (kind === "trash" && !trashPurged && !qs.metadata?.fromCache){ trashPurged = true; trashPurge(); } saveCache(); render();
+    S[kind] = next; if ((kind === "entries" || kind === "trips") && !qs.metadata?.fromCache) autoExtendSoon(); if (kind === "trash" && !trashPurged && !qs.metadata?.fromCache){ trashPurged = true; trashPurge(); } saveCache(); render();
   }, err => setSync("bad","Mistet kontakt med databasen"));
   sub("entries", refs.entries); sub("trips", refs.trips); sub("approvals", refs.approvals); sub("trash", refs.trash);
   updateSyncBadge(); flush();
@@ -824,6 +826,44 @@ function payCalc(date, entries, ordBefore){
 function groupByDate(list){ const m = {}; list.forEach(e => (m[e.date] = m[e.date] || []).push(e)); return m; }
 /* Diett for reise */
 const ldate = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+// v30.1/v30.2: timer på dagreise hentes fra timelisten (bare aktive prosjekter). Offshore: første til siste reise/mob.-linje. Land: første til siste linje den dagen.
+function travelSpanOn(date, who){ let a = null, b = null; const es = entriesIn(date, date, "", who || "");
+  if (!es.some(e => (e.lines || []).some(l => ["reise","mob"].includes(l.type) && l.start && l.end))) return null;
+  // Offshore: bare reise/mob. (tiden på installasjonen har fri kost). Land: fra første til siste linje (borte hele dagen).
+  es.forEach(e => (e.lines || []).forEach(l => { if (!l.start || !l.end || (e.dayType === "offshore" && !["reise","mob"].includes(l.type))) return;
+    const s0 = toMin(l.start); let e0 = toMin(l.end); if (e0 <= s0) e0 += 1440; if (a === null || s0 < a) a = s0; if (b === null || e0 > b) b = e0; }));
+  return a === null ? null : (b - a) / 60; }
+// v30.2: Reiser følger timelisten. Har personen reise/mob.-linjer på prosjektet dagene rett før avreise eller etter hjemkomst
+// (inntil 3 dager, og ikke dekket av en annen reise), forlenges reisen til første/siste reiselinje. Gamle ender og dager imellom blir overnatting,
+// nye ender blir dagreise (timer fra timelisten). Bare aktive prosjekter. Reisen forkortes aldri automatisk.
+function tripExtendCalc(id, tr){
+  const c = contractById(tr.contractId); if (!c || statusOf(c) !== "aktiv" || !tr.start || !tr.end || !tr.overnight) return null;
+  const w = whoOf(tr), s0 = tr.start, e0 = tr.end, d0 = s0.slice(0,10), d1 = e0.slice(0,10); let ns = s0, ne = e0;
+  const other = d => Object.entries(S.trips || {}).some(([k, t]) => k !== id && whoOf(t) === w && t.start && t.end && t.start.slice(0,10) <= d && t.end.slice(0,10) >= d);
+  const p2 = t => String(t).length === 4 ? "0" + t : String(t);
+  entriesIn(addDays(d0, -3), addDays(d1, 3), c.id, w).forEach(e => { if (e.date >= d0 && e.date <= d1) return; if (other(e.date)) return;
+    (e.lines || []).forEach(l => { if (!["reise","mob"].includes(l.type) || !l.start || !l.end) return;
+      const st = e.date + "T" + p2(l.start), en = (toMin(l.end) <= toMin(l.start) ? addDays(e.date, 1) : e.date) + "T" + p2(l.end);
+      if (e.date > d1 && en > ne) ne = en; if (e.date < d0 && st < ns) ns = st; }); });
+  if (ns === s0 && ne === e0) return null;
+  const cnt = (a, b) => tripDiet(Object.assign({}, tr, {start:a, end:b, overnight:true, days:[]})).rows.length;
+  const n0 = cnt(s0, e0), n = cnt(ns, ne), shift = daysBetween(ns.slice(0,10), d0), old = tr.days || [];
+  const hotel = () => ({b:false, l:false, m:false, offshore:false, lodging:"hotell"}), dag = () => ({b:false, l:false, m:false, offshore:false, lodging:"dag"});
+  const endX = ne.slice(0,10) > d1, startX = shift > 0;
+  const days = Array.from({length:n}, (_, j) => { const i = j - shift, isOld = i >= 0 && i < n0;
+    if (isOld){ if ((i === 0 && startX) || (i === n0 - 1 && endX)) return hotel(); return old[i] || {}; } // gammel ende har nå en natt borte
+    if ((j === 0 && startX) || (j === n - 1 && endX)) return dag();
+    return hotel(); });
+  return Object.assign(clone(tr), {start: ns, end: ne, days});
+}
+let extT = null;
+function autoExtendSoon(){ clearTimeout(extT); extT = setTimeout(() => {
+  Object.entries(S.trips || {}).forEach(([id, tr]) => { if (editing && editing.kind === "trip" && editing.id === id) return; const nt = tripExtendCalc(id, tr); if (!nt) return;
+    const f = x => `${+x.slice(8,10)}.${+x.slice(5,7)}. kl. ${x.slice(11,16)}`;
+    if (!FIELD) trashPut("trips", id, tr); // gammel versjon i papirkurven
+    persist("trips", id, nt); toast(`Reisen for ${personName(whoOf(tr))} følger timelisten: ${nt.start !== tr.start ? "avreise " + f(nt.start) : ""}${nt.start !== tr.start && nt.end !== tr.end ? ", " : ""}${nt.end !== tr.end ? "hjemkomst " + f(nt.end) : ""}`); });
+}, 1500); }
+setTimeout(autoExtendSoon, 4000);
 function tripDiet(tr){
   const st = S.settings.state;
   const res = {rows:[], diet:0, night:0, taxfree:0, hours:0};
@@ -845,21 +885,23 @@ function tripDiet(tr){
   }
   const full = Math.floor(h/24), rest = h - full*24;
   const n = full + (rest >= num(st.partialDayHours) ? 1 : 0);
+  const tc = contractById(tr.contractId), autoOk = !tc || statusOf(tc) === "aktiv"; // avsluttede prosjekter beholder timene som står
   for (let i = 0; i < n; i++){
     const c = rowCfg(i), pb = i >= full, noH = c.dagH === undefined || c.dagH === null || c.dagH === "";
     // Påbegynt døgn (særavtalen § 9 nr. 1 d): dagsats etter faktiske timer, med mindre det er valgt overnatting
     const lodg0 = c.lodging === undefined && pb ? "dag" : c.lodging;
     const dag = !c.offshore && (lodg0 === "dag" || (lodg0 === undefined && !noH));
-    const dh = noH && pb ? rest : num(c.dagH);
+    const d0 = new Date(a.getTime() + i*864e5);
+    const autoH = dag && !c.dagHMan && autoOk ? travelSpanOn(ldate(d0), tr.who) : null;
+    const dh = autoH !== null ? autoH : noH && pb ? rest : num(c.dagH);
     const base = dag ? dagSats(dh) : num(st.dietNight);
     const ded = (c.b ? num(st.mealB) : 0) + (c.l ? num(st.mealL) : 0) + (c.m ? num(st.mealD) : 0);
     const amt = c.offshore ? 0 : Math.max(0, base*(1-ded/100));
     const lodging = c.offshore ? "offshore" : dag ? "dag" : (lodg0 || "hotell");
     const night = (!dag && lodging === "ulegitimert" && i < full) ? num(st.nightUnrec) : 0;
-    const d0 = new Date(a.getTime() + i*864e5);
     const tfBase = lodging === "hotell" ? num(st.tfHotel) : lodging === "pensjonat" ? num(st.tfPension) : lodging === "privat" ? num(st.tfPrivate) : num(st.tfPension);
     const tfRow = c.offshore ? 0 : dag ? Math.min(amt, dh > 12 ? num(st.tfOver12) : dh >= 6 ? num(st.tf6to12) : 0) : Math.min(amt, tfBase*(1-ded/100)) + Math.min(night, num(st.tfNight));
-    res.rows.push({i, ph: pb && noH ? hr(rest) : "", label:`Døgn ${i+1} · ${d0.getDate()}.${d0.getMonth()+1}.${i >= full ? " (påbegynt)" : ""}${dag ? ` · dagreise` : ""}`, base, amt, night, cfg:c, lodging, ded, date:ldate(d0), tf:tfRow});
+    res.rows.push({i, ph: pb && noH ? hr(rest) : "", label:`Døgn ${i+1} · ${d0.getDate()}.${d0.getMonth()+1}.${i >= full ? " (påbegynt)" : ""}${dag ? ` · dagreise` : ""}`, n:i+1, pbg: i >= full, dagr: !!dag, autoH, base, amt, night, cfg:c, lodging, ded, date:ldate(d0), tf:tfRow});
     res.diet += amt; res.night += night;
     res.taxfree += tfRow;
   }
@@ -3072,9 +3114,22 @@ function offshoreDays(tr, c){
   const n = tripDiet(Object.assign({}, tr, {overnight:true, days:[]})).rows.length; tr.overnight = true;
   tr.days = Array.from({length:n}, (_, i) => { const o = Object.assign({}, tr.days[i] || {}); if (i === 0 || i === n - 1){ o.offshore = false; o.lodging = "dag"; if (o.dagH === undefined) o.dagH = ""; } else { o.offshore = true; delete o.lodging; delete o.dagH; } return o; });
 }
+// v29.9: Når avreise/hjemkomst endres på offshore-prosjekt: første/siste dag beholder sitt oppsett (dagreise, hotell kvelden før osv.)
+// og flyttes til de nye endene. Gamle ender og nye dager midt i blir offshore (ingen diett). Dager midt i som fantes fra før, røres ikke.
+function offshoreRedate(tr, s0, e0){
+  const c = contractById(tr.contractId);
+  if (!c || (c.planType || "offshore") !== "offshore" || !tr.overnight || !tr.start || !tr.end || !s0 || !e0) return;
+  if (tr.start.slice(0,10) === s0.slice(0,10) && tr.end.slice(0,10) === e0.slice(0,10)) return; // bare klokkeslett endret
+  const cnt = (a, b) => tripDiet(Object.assign({}, tr, {start:a, end:b, overnight:true, days:[]})).rows.length;
+  const n0 = cnt(s0, e0), n = cnt(tr.start, tr.end); if (!n0 || !n) return;
+  const d0 = s0.slice(0,10), d1 = tr.start.slice(0,10), first = clone(tr.days[0] || {}), last = clone(tr.days[n0 - 1] || {});
+  const mid = {}; for (let i = 1; i < n0 - 1; i++) mid[addDays(d0, i)] = tr.days[i] || {};
+  tr.days = Array.from({length:n}, (_, j) => { if (j === 0) return first; if (j === n - 1) return last;
+    const m = mid[addDays(d1, j)]; if (m) return m; return {b:false, l:false, m:false, offshore:true}; });
+}
 function drawTrip(){
   const tr = editing.obj, hi = isHire(whoOf(tr)), pw = hi ? "Innleid" : "Ansatt", d = tripDiet(tr), m = tripMoney(tr), fxT0 = mobModeOf(contractById(tr.contractId)) === "fixed" && !!contractById(tr.contractId), fxS = fxOn(contractById(tr.contractId)), fxT = fxT0 && !fxS;
-  const lodgeSel = (i, v, h, ph) => `<div class="row" style="gap:4px;flex-wrap:nowrap"><select class="inp${v === "dag" ? "" : " wide"}" id="dy-${i}-lodging" data-day="${i}" data-k="lodging" aria-label="Overnatting" ><option value="dag"${v==="dag"?" selected":""}>Dagreise</option><option value="hotell"${["hotell","pensjonat","privat"].includes(v)?" selected":""}>Overnatting</option><option value="ulegitimert"${v==="ulegitimert"?" selected":""}>Uten kvittering</option></select>${v === "dag" ? `<input class="inp" style="width:3em;padding:4px 5px;text-align:right" type="number" step="0.5" min="0" id="dy-${i}-dagH" data-day="${i}" data-k="dagH" value="${esc(h ?? "")}" placeholder="${ph || "t"}" aria-label="Timer reise"><span class="small muted">t</span>` : ""}</div>`
+  const lodgeSel = (i, v, h, ph, av) => `<div class="row" style="gap:4px;flex-wrap:nowrap"><select class="inp${v === "dag" ? "" : " wide"}" id="dy-${i}-lodging" data-day="${i}" data-k="lodging" aria-label="Overnatting" ><option value="dag"${v==="dag"?" selected":""}>Dagreise</option><option value="hotell"${["hotell","pensjonat","privat"].includes(v)?" selected":""}>Overnatting</option><option value="ulegitimert"${v==="ulegitimert"?" selected":""}>Uten kvittering</option></select>${v === "dag" ? `<input class="inp" style="width:3em;padding:4px 5px;text-align:right" type="number" step="0.5" min="0" id="dy-${i}-dagH" data-day="${i}" data-k="dagH" value="${esc(av !== undefined && av !== null ? String(Math.round(av * 100) / 100) : h ?? "")}"${av !== undefined && av !== null ? ` data-av="${Math.round(av * 100) / 100}" title="Fra timelisten (reise/mob.). Skriv inn et annet tall for å overstyre."` : ""} placeholder="${ph || "t"}" aria-label="Timer reise"><span class="small muted">${av !== undefined && av !== null ? "t · timeliste" : "t"}</span>` : ""}</div>`
   openSheet(`
     <div class="row spread"><h2>${editing.id ? "Reise" : "Ny reise"}${editing.obj.who !== null ? " – " + esc(personName(whoOf(editing.obj))) : ""}</h2><button class="btn ghost" data-a="close">Lukk</button></div>
     ${fxT0 ? `<div class="fxNote"><b>Fastpris mob./demob.</b> – ${fxS ? "dekker reisen ut og hjem. Diett og hotell under oppholdet faktureres kunden. " + (kmBilled(contractById(tr.contractId)) ? "Kjøring faktureres i tillegg." : "Kjøring faktureres ikke.") + " Andre utlegg (bom, ferje, fly …) faktureres bare når du huker av «faktureres i tillegg til fastpris»." : (kmBilled(contractById(tr.contractId)) ? "diett faktureres ikke kunden, kjøring faktureres i tillegg." : "diett og kjøring faktureres ikke kunden.") + " Utlegg faktureres bare når du huker av «faktureres i tillegg til fastpris»."}</div>` : ""}
@@ -3094,13 +3149,13 @@ function drawTrip(){
     </div>
 
     <section class="td" style="display:grid;gap:8px"><div class="row spread"><h3>Diett</h3><span class="small muted num">${hr(d.hours)} t reise</span></div>
-      ${d.rows.length ? `<div class="tw"><table class="dietT"><thead><tr><th>Døgn</th><th title="Offshore: fri kost og losji">Offsh.</th><th>Frokost</th><th>Lunsj</th><th>Middag</th>${tr.overnight ? "<th>Overnatting</th>" : ""}<th class="n emp" title="Diett til ${pw.toLowerCase()}">Diett</th>${fxT ? "" : `<th class="cust" title="Faktureres kunde">Kunde</th>`}</tr></thead><tbody>
-      ${d.rows.map(r => `<tr><td class="small d-lab">${esc(r.label)}</td>
+      ${d.rows.length ? `<div class="tw"><table class="dietT"><thead><tr><th>Dato</th><th title="Offshore: fri kost og losji">Offsh.</th><th>Frokost</th><th>Lunsj</th><th>Middag</th>${tr.overnight ? "<th>Overnatting</th>" : ""}<th class="n emp" title="Diett til ${pw.toLowerCase()}">Diett</th>${fxT ? "" : `<th class="cust" title="Faktureres kunde">Kunde</th>`}</tr></thead><tbody>
+      ${d.rows.map(r => `<tr><td class="small d-lab">${r.date ? `<b class="d-date">${DOW[new Date(r.date + "T12:00:00").getDay()]} ${+r.date.slice(8,10)}.${+r.date.slice(5,7)}.</b><span class="d-sub">døgn ${r.n}${r.pbg ? " · påbegynt" : ""}${r.dagr ? " · dagreise" : ""}</span>` : esc(r.label)}</td>
         <td class="d-offshore" data-l="Offshore"><input type="checkbox" id="dy-${r.i}-offshore" data-day="${r.i}" data-k="offshore" ${r.cfg.offshore ? "checked" : ""} aria-label="Offshore, fri kost"></td>
         <td class="d-b" data-l="Frokost"><input type="checkbox" id="dy-${r.i}-b" data-day="${r.i}" data-k="b" ${r.cfg.b ? "checked" : ""} aria-label="Frokost dekket"></td>
         <td class="d-l" data-l="Lunsj"><input type="checkbox" id="dy-${r.i}-l" data-day="${r.i}" data-k="l" ${r.cfg.l ? "checked" : ""} aria-label="Lunsj dekket"></td>
         <td class="d-m" data-l="Middag"><input type="checkbox" id="dy-${r.i}-m" data-day="${r.i}" data-k="m" ${r.cfg.m ? "checked" : ""} aria-label="Middag dekket"></td>
-        ${tr.overnight ? `<td class="d-lodge">${r.cfg.offshore ? `<span class="small muted">Fri kost/losji</span>` : lodgeSel(r.i, r.lodging === "dag" ? "dag" : (r.cfg.lodging || "hotell"), r.cfg.dagH, r.ph)}</td>` : ""}
+        ${tr.overnight ? `<td class="d-lodge">${r.cfg.offshore ? `<span class="small muted">Fri kost/losji</span>` : lodgeSel(r.i, r.lodging === "dag" ? "dag" : (r.cfg.lodging || "hotell"), r.cfg.dagH, r.ph, r.autoH)}</td>` : ""}
         <td class="n emp d-amt">${kr(r.amt + r.night)}</td>
         ${fxT ? "" : `<td class="cust d-cust" data-l="Kunde"><input type="checkbox" style="accent-color:var(--cust)" id="dy-${r.i}-bill" data-day="${r.i}" data-k="bill" ${rowBilled(tr, r, contractById(tr.contractId)) ? "checked" : ""} ${contractById(tr.contractId) ? "" : "disabled"} aria-label="Faktureres kunde"></td>`}</tr>`).join("")}
       <tr class="sum"><td colspan="${tr.overnight ? 6 : 5}">${d.night ? "Diett + overnatting u/kvittering" : "Diett"}</td><td class="n emp">${kr(d.diet + d.night)}</td>${fxT ? "" : `<td class="n small cust">${m.custDietDays} d</td>`}</tr></tbody></table></div>
@@ -3191,12 +3246,16 @@ function readTripForm(changed){
   const tr = editing.obj;
   { const tw = $("#tWho"); if (tw) tr.who = tw.value === "__" ? null : tw.value; }
   tr.title = $("#tTitle").value; tr.contractId = $("#tC").value; tr.destination = $("#tDest").value;
+  const dPrev = editing.tripDates || {s: tr.start, e: tr.end};
   tr.start = $("#tStart").value; tr.end = $("#tEnd").value; tr.overnight = $("#tNight").checked; tr.plan = $("#tPlan").value;
   const billEls = [];
-  document.querySelectorAll("#sheetHost [data-day]").forEach(el => { const i = +el.dataset.day; tr.days[i] = tr.days[i] || {}; if (el.dataset.k === "bill"){ billEls.push(el); return; } tr.days[i][el.dataset.k] = el.type === "checkbox" ? el.checked : el.value; });
+  document.querySelectorAll("#sheetHost [data-day]").forEach(el => { const i = +el.dataset.day; tr.days[i] = tr.days[i] || {}; if (el.dataset.k === "bill"){ billEls.push(el); return; }
+    if (el.dataset.k === "dagH"){ const cfg = tr.days[i]; if (el.dataset.av !== undefined && el.value === el.dataset.av) return; // uendret verdi fra timelisten
+      if (String(cfg.dagH ?? "") !== el.value || el.dataset.av !== undefined){ cfg.dagH = el.value; if (el.value === "") delete cfg.dagHMan; else cfg.dagHMan = true; } return; } tr.days[i][el.dataset.k] = el.type === "checkbox" ? el.checked : el.value; });
   const cc = contractById($("#tC").value);
   billEls.forEach(el => { if (el.disabled || el !== changed) return; const cfg = tr.days[+el.dataset.day]; delete cfg.bill; if (el.checked !== billDefault(tr, cfg, cc)) cfg.bill = el.checked; });
   for (let i = 0; i < tr.days.length; i++) if (!tr.days[i]) tr.days[i] = {};
+  if (tr.start && tr.end){ offshoreRedate(tr, dPrev.s, dPrev.e); editing.tripDates = {s: tr.start, e: tr.end}; }
   document.querySelectorAll("#sheetHost [data-leg]").forEach(box => { const l = tr.legs[+box.dataset.leg];
     box.querySelectorAll("[data-lg]").forEach(el => { const k = el.dataset.lg;
       if (k === "firmPaid") l.paidBy = el.checked ? "firma" : "meg";
