@@ -384,7 +384,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.3</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.4</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -399,7 +399,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v2.3";
+const VERSION = "v2.4";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -729,9 +729,17 @@ function customerCalc(date, contract, entries, ordBefore, daysBefore){
     if (holD && rHOd) add("holot","Overtid helligdag (utover dagraten)",otD,"t",rHOd); else add("ot","Overtid (utover dagraten)",otD,"t",num(contract.rOT));
   } else {
     const thr = num(contract.ordThreshold) || 24;
-    let ord = Math.min(t.arbeid, thr), ot = Math.max(0, t.arbeid - thr);
-    // Onshore: lørdag og søndag faktureres som overtid (alle timer). Offshore: alle dager er like.
     const wdN = new Date(date + "T12:00:00").getDay(), weekend = wdN === 0 || wdN === 6;
+    // v30.4: Onshore-prosjekt: arbeid utenfor prosjektets arbeidstid (f.eks. 08–16) er overtid. Reise gir aldri overtid.
+    let outW = 0;
+    if (!offshore && !weekend && contract.planType === "felt"){ const [wf, wt] = workDayOf(contract).map(toMin);
+      entries.forEach(e => (e.lines || []).forEach(l => { if (l.type !== "arbeid" || !l.start || !l.end) return;
+        let a = toMin(l.start), b = toMin(l.end); if (b <= a) b += 1440;
+        const ins = Math.max(0, Math.min(b, wt) - Math.max(a, wf)) + Math.max(0, Math.min(b, wt + 1440) - Math.max(a, wf + 1440));
+        outW += (b - a - ins) / 60; }));
+      outW = Math.min(outW, t.arbeid); }
+    let ord = Math.min(t.arbeid - outW, thr), ot = Math.max(0, t.arbeid - outW - thr) + outW;
+    // Onshore: lørdag og søndag faktureres som overtid (alle timer). Offshore: alle dager er like.
     if (!offshore && weekend && contract.weekendOT !== false && !holidayName(date)){ ot += ord; ord = 0; }
     if (offshore && ordBefore !== undefined && ordBefore !== null){ const lim = num(contract.offLimit) || offLimit(), left = Math.max(0, lim - ordBefore);
       if (ord > left){ ot += ord - left; ord = left; res.longStay = true; } }
@@ -1009,7 +1017,8 @@ const PAY0 = () => ({h50:0,h100:0,reise:0,reiseFree:0,reiseUntimed:0,kr50:0,kr10
 function hirePayCalc(date, es, h, ordBefore){
   const r = PAY0(); if (!h || !es.length) return r;
   const off = es.some(e => e.dayType === "offshore");
-  const hc = Object.assign({}, h, {ordThreshold: off ? (num(h.thrOff) || 12) : (num(h.thrOn) || 8), mobMode:"actual", dayRate:0, rMob:0, hotbedRate: num(h.hotbedRate)});
+  const pc = contractById(es[0].contractId); // arbeidstid og prosjekttype følger prosjektet (v30.4)
+  const hc = Object.assign({}, h, {ordThreshold: off ? (num(h.thrOff) || 12) : (num(h.thrOn) || 8), mobMode:"actual", dayRate:0, rMob:0, hotbedRate: num(h.hotbedRate), planType: pc ? pc.planType : undefined, workDay: pc ? pc.workDay : undefined});
   customerCalc(date, hc, es, ordBefore).items.forEach(it => {
     if (it.code === "ord" || it.code === "hol" || it.code === "night"){ r.h50 += it.qty; r.kr50 += it.amount; }
     else if (it.code === "ot" || it.code === "holot"){ r.h100 += it.qty; r.kr100 += it.amount; }
@@ -2929,7 +2938,7 @@ function vOppsett(){
   </div></details>
   <details class="card setSec" data-fold="setState"${S.anbFold && S.anbFold.setState ? " open" : ""}><summary><h3>Statens satser ${esc(st.year)}</h3><span class="small muted">diett og km – kontroller ved årsskifte</span></summary><div style="display:grid;gap:12px;margin-top:10px">
     <p class="small muted" style="margin:0">Brukes også som sats til kunde når kontrakten ikke har egen.</p>
-    <div class="fgrid">${f("state.year","År",st.year,"number","1")}${f("state.dietNight","Diett døgn m/overnatting",st.dietNight)}${f("state.diet6to12","Diett 6–12 t",st.diet6to12)}${f("state.dietOver12","Diett over 12 t u/overnatting",st.dietOver12)}${f("state.nightUnrec","Overnatting u/kvittering",st.nightUnrec)}${f("state.partialDayHours","Påbegynt døgn gir full sats fra (t)",st.partialDayHours)}</div>
+    <div class="fgrid">${f("state.year","År",st.year,"number","1")}${f("state.dietNight","Diett døgn m/overnatting",st.dietNight)}${f("state.diet6to12","Diett 6–12 t",st.diet6to12)}${f("state.dietOver12","Diett over 12 t u/overnatting",st.dietOver12)}${f("state.nightUnrec","Overnatting u/kvittering",st.nightUnrec)}${f("state.partialDayHours","Påbegynt døgn gir diett fra (t)",st.partialDayHours)}</div>
     <div class="fgrid">${f("state.mealB","Trekk frokost %",st.mealB)}${f("state.mealL","Trekk lunsj %",st.mealL)}${f("state.mealD","Trekk middag %",st.mealD)}</div>
     <div class="fgrid">${f("state.km","Km-sats kr",st.km)}${f("state.kmPass","Passasjer kr/km",st.kmPass)}${f("state.kmTrailer","Tilhenger kr/km",st.kmTrailer)}${f("state.kmForest","Skogs-/anleggsvei kr/km",st.kmForest)}</div>
   </div></details>
