@@ -384,7 +384,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.4</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.6</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -399,7 +399,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v2.4";
+const VERSION = "v2.6";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -505,6 +505,7 @@ function persist(kind, id, data){
     const cs = x => x && x.contractId && contractById(x.contractId) ? statusOf(contractById(x.contractId)) : "aktiv";
     if ((S[kind][id] && cs(S[kind][id]) !== "aktiv") || (data && cs(data) !== "aktiv")){ const st = cs(data || S[kind][id]) !== "aktiv" ? cs(data || S[kind][id]) : cs(S[kind][id]); toast(`Kontrakten har status «${STATUS[st]}». Endre status under Anbud for å føre eller endre.`); render(); return false; }
   }
+  if (kind === "entries" && data) lunchNormalize(data);
   if (kind === "entries" && data && num(data.mob) && !hasMobLine(data)) data.mob = 0; // ingen mob.-linje = ingen mob. (skjult rest etter retting)
   if (kind === "settings") S.settings = data;
   else if (data === null){ const old = S[kind][id]; delete S[kind][id]; if (old && !FIELD && (kind === "entries" || kind === "trips")) trashPut(kind, id, old); }
@@ -738,7 +739,9 @@ function customerCalc(date, contract, entries, ordBefore, daysBefore){
         const ins = Math.max(0, Math.min(b, wt) - Math.max(a, wf)) + Math.max(0, Math.min(b, wt + 1440) - Math.max(a, wf + 1440));
         outW += (b - a - ins) / 60; }));
       outW = Math.min(outW, t.arbeid); }
-    let ord = Math.min(t.arbeid - outW, thr), ot = Math.max(0, t.arbeid - outW - thr) + outW;
+    // v30.6: onshore-prosjekt hverdag: arbeidstiden styrer alene (ingen 8 t-grense). Ellers grensen som før.
+    const winRule = !offshore && !weekend && contract.planType === "felt";
+    let ord = winRule ? t.arbeid - outW : Math.min(t.arbeid - outW, thr), ot = winRule ? outW : Math.max(0, t.arbeid - outW - thr) + outW;
     // Onshore: lørdag og søndag faktureres som overtid (alle timer). Offshore: alle dager er like.
     if (!offshore && weekend && contract.weekendOT !== false && !holidayName(date)){ ot += ord; ord = 0; }
     if (offshore && ordBefore !== undefined && ordBefore !== null){ const lim = num(contract.offLimit) || offLimit(), left = Math.max(0, lim - ordBefore);
@@ -766,8 +769,14 @@ function hourlyRate(){ const p = S.settings.pay; return num(p.hourly) || (num(p.
 /* Lunsj: onshore trekkes 30 min med mindre prosjektet har «Betalt lunsj: Ja». Offshore trekkes aldri. */
 const lunchMin = (c, dayType) => dayType === "felt" && !(c && c.paidLunch) ? 30 : 0;
 // Førte onshore-dager på prosjektet der pausen er standard (0 eller 30) og avviker fra valget. Signerte dager og egne pauser røres ikke.
+// v30.6: Ubetalt lunsj (0,5 t) trekkes bare når arbeidslinjen dekker lunsjen midt i prosjektets arbeidstid (07–15 → 11:00–11:30).
+// Kveldsskift og korte skift utenom lunsjen får ikke trekk. Bare standardpausen (30 min) røres; egne pauser står.
+function lunchCovers(l, c){ const [wf, wt] = workDayOf(c).map(toMin), lp = wf + Math.round((wt - wf) / 2 / 30) * 30; let a = toMin(l.start), b = toMin(l.end); if (b <= a) b += 1440; return a <= lp && b >= lp + 30; }
+function lunchNormalize(e){ const c = contractById(e.contractId); if (!c || c.planType !== "felt" || e.dayType !== "felt" || c.paidLunch) return e;
+  (e.lines || []).forEach(l => { if (l.type !== "arbeid" || !l.start || !l.end) return; if (num(l.pause) === 30 && !lunchCovers(l, c)) l.pause = 0; });
+  return e; }
 function lunchTargets(cid){ const c = contractById(cid), want = lunchMin(c, "felt");
-  return Object.entries(S.entries).filter(([, e]) => e.contractId === cid && e.dayType === "felt" && !isLocked(e.date, cid) && (e.lines || []).some(l => l.type === "arbeid" && l.start && l.end && [0, 30].includes(num(l.pause)) && num(l.pause) !== want)); }
+  return Object.entries(S.entries).filter(([, e]) => e.contractId === cid && e.dayType === "felt" && !isLocked(e.date, cid) && (e.lines || []).some(l => l.type === "arbeid" && l.start && l.end && [0, 30].includes(num(l.pause)) && num(l.pause) !== (want && lunchCovers(l, c) ? want : 0))); }
 function lunchAsk(cid){ const n = lunchTargets(cid), c = contractById(cid); if (!n.length) return false; const want = lunchMin(c, "felt");
   openSheet(`<div class="row spread"><h2>Bruke på førte dager?</h2><button class="btn ghost" data-a="close">Lukk</button></div>
     <p style="margin:0">${n.length} førte onshore-${n.length === 1 ? "dag" : "dager"} på ${esc(c.name)} har ${want ? "ikke lunsjtrekk" : "30 min lunsjtrekk"}.</p>
@@ -775,7 +784,7 @@ function lunchAsk(cid){ const n = lunchTargets(cid), c = contractById(cid); if (
     <div class="row spread"><span></span><div class="row"><button class="btn" data-a="close">Bare nye føringer</button><button class="btn pri" data-a="lunchApply" data-id="${esc(cid)}">Bruk på ${n.length} ${n.length === 1 ? "dag" : "dager"}</button></div></div>`);
   return true; }
 function lunchApply(cid){ const want = lunchMin(contractById(cid), "felt"); let k = 0;
-  lunchTargets(cid).forEach(([id, e]) => { const r = clone(e); r.lines.forEach(l => { if (l.type === "arbeid" && l.start && l.end && [0, 30].includes(num(l.pause))) l.pause = want; }); r.updated = Date.now(); if (persist("entries", id, r) !== false) k++; });
+  lunchTargets(cid).forEach(([id, e]) => { const r = clone(e); r.lines.forEach(l => { if (l.type === "arbeid" && l.start && l.end && [0, 30].includes(num(l.pause))) l.pause = want && lunchCovers(l, contractById(cid)) ? want : 0; }); r.updated = Date.now(); if (persist("entries", id, r) !== false) k++; });
   closeSheet(); toast(`${want ? "30 min lunsj trukket" : "Lunsjtrekk fjernet"} på ${k} ${k === 1 ? "dag" : "dager"}`); }
 /* Arbeidstid onshore per prosjekt (følger kunden). Alle med 30 min pause = 7,5 t. */
 const WORKDAY = {"0700":["07:00","15:00"], "0730":["07:30","15:30"], "0800":["08:00","16:00"]};
@@ -813,6 +822,15 @@ function payCalc(date, entries, ordBefore){
   r.covered = Math.min(work, covered);
   if (weekday){ r.h50 = Math.min(ot, thr); r.h100 = ot - r.h50; }
   else r.h100 = ot;
+  // v30.5: Onshore-prosjekt, hverdag: lønn følger kunden. Arbeid innenfor prosjektets arbeidstid (f.eks. 07–15) er dekket av grunnlønnen,
+  // alt arbeid utenfor gir 100 % tillegg. Reise teller ikke (egne regler over). Helg og offshore som før.
+  if (weekday && wW && !off){ const [wf, wt] = wW.map(toMin); let outside = 0;
+    rel.forEach(e => (e.lines || []).forEach(l => { if (l.type !== "arbeid" || !l.start || !l.end) return;
+      let a = toMin(l.start), b = toMin(l.end); if (b <= a) b += 1440;
+      const ins = Math.max(0, Math.min(b, wt) - Math.max(a, wf)) + Math.max(0, Math.min(b, wt + 1440) - Math.max(a, wf + 1440));
+      outside += (b - a - ins) / 60; }));
+    outside = Math.min(outside, work);
+    r.covered = work - outside; r.h50 = 0; r.h100 = outside; r.outsideH = outside; }
   // Langt offshoreopphold: timer etter grensen (standard 168 ordinære) gir 100 %
   if (off && ordBefore !== undefined && ordBefore !== null && r.h50 > 0){
     const c0 = contractById((rel.find(e => e.dayType === "offshore") || {}).contractId), dthr = num(c0 && c0.ordThreshold) || 12;
@@ -841,15 +859,19 @@ function travelSpanOn(date, who){ let a = null, b = null; const es = entriesIn(d
   es.forEach(e => (e.lines || []).forEach(l => { if (!l.start || !l.end || (e.dayType === "offshore" && !["reise","mob"].includes(l.type))) return;
     const s0 = toMin(l.start); let e0 = toMin(l.end); if (e0 <= s0) e0 += 1440; if (a === null || s0 < a) a = s0; if (b === null || e0 > b) b = e0; }));
   return a === null ? null : (b - a) / 60; }
-// v30.2: Reiser følger timelisten. Har personen reise/mob.-linjer på prosjektet dagene rett før avreise eller etter hjemkomst
-// (inntil 3 dager, og ikke dekket av en annen reise), forlenges reisen til første/siste reiselinje. Gamle ender og dager imellom blir overnatting,
+// v30.2/v30.6: Reiser følger timelisten. Har personen reise/mob.-linjer på prosjektet dagene rett før avreise eller etter hjemkomst
+// (sammenhengende føringer dag for dag, inntil 14 dager, og ikke dekket av en annen reise), forlenges reisen til første/siste reiselinje. Gamle ender og dager imellom blir overnatting,
 // nye ender blir dagreise (timer fra timelisten). Bare aktive prosjekter. Reisen forkortes aldri automatisk.
 function tripExtendCalc(id, tr){
   const c = contractById(tr.contractId); if (!c || statusOf(c) !== "aktiv" || !tr.start || !tr.end || !tr.overnight) return null;
   const w = whoOf(tr), s0 = tr.start, e0 = tr.end, d0 = s0.slice(0,10), d1 = e0.slice(0,10); let ns = s0, ne = e0;
   const other = d => Object.entries(S.trips || {}).some(([k, t]) => k !== id && whoOf(t) === w && t.start && t.end && t.start.slice(0,10) <= d && t.end.slice(0,10) >= d);
   const p2 = t => String(t).length === 4 ? "0" + t : String(t);
-  entriesIn(addDays(d0, -3), addDays(d1, 3), c.id, w).forEach(e => { if (e.date >= d0 && e.date <= d1) return; if (other(e.date)) return;
+  // v30.6: bare sammenhengende dager – hver dag mellom reisen og reiselinjen må ha føring på prosjektet (inntil 14 dager)
+  const has = d => entriesIn(d, d, c.id, w).length > 0;
+  const chain = (a, b) => { for (let d = a; d <= b; d = addDays(d, 1)) if (!has(d)) return false; return true; };
+  entriesIn(addDays(d0, -14), addDays(d1, 14), c.id, w).forEach(e => { if (e.date >= d0 && e.date <= d1) return; if (other(e.date)) return;
+    if (e.date > d1 && !chain(addDays(d1, 1), e.date)) return; if (e.date < d0 && !chain(e.date, addDays(d0, -1))) return;
     (e.lines || []).forEach(l => { if (!["reise","mob"].includes(l.type) || !l.start || !l.end) return;
       const st = e.date + "T" + p2(l.start), en = (toMin(l.end) <= toMin(l.start) ? addDays(e.date, 1) : e.date) + "T" + p2(l.end);
       if (e.date > d1 && en > ne) ne = en; if (e.date < d0 && st < ns) ns = st; }); });
