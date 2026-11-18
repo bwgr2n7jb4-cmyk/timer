@@ -384,7 +384,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.7</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.8</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -399,7 +399,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v2.7";
+const VERSION = "v2.8";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -650,7 +650,9 @@ function legsToExp(tr){ tr.legs = tr.legs || []; tr.expenses = tr.expenses || []
 // Utleggstype: lagret type, eller gjettet fra tekst/leverandør når typen er «Annet» (utlegg fra mobil/kNm Timer før v27.7)
 const XGUESS = [["taxi", /\btaxi|drosje|uber\b|bolt\b/i], ["parkering", /parker|p-hus|easypark|apcoa|onepark/i], ["fly", /\bfly\b|flybillett|sas\b|norwegian|widerøe|wideroe|flight/i], ["hotell", /hotell|hotel|overnatt|scandic|thon|clarion|comfort|quality|radisson/i], ["bom", /\bbom\b|bompeng|autopass|ferde\b|fjellinjen/i], ["ferje", /ferje|ferge|fjord1|norled|boreal/i], ["tog_buss", /\btog\b|\bbuss\b|vy\b|flytoget|kolumbus|skyss|flybuss/i], ["leiebil", /leiebil|hertz|avis\b|europcar|sixt|budget/i], ["drivstoff", /drivstoff|bensin|diesel|circle k|esso|shell\b|uno-x|yx\b/i], ["mat", /\bmat\b|lunsj|middag|frokost|kafé|kafe|restaurant/i]];
 function xType(x){ const t = x && x.type; if (t && t !== "annet") return t; const s = [x && x.text, x && x.vendor].filter(Boolean).join(" "); const g = s && XGUESS.find(([, re]) => re.test(s)); return g ? g[0] : (t || "annet"); }
-const expLabel = x => { const a = [EXP_TYPE[xType(x)] || "", (x.vendor || "").trim(), (x.text || "").trim()].filter(Boolean); return a.filter((v, i) => a.findIndex(w => w.toLowerCase() === v.toLowerCase()) === i).join(" – ") || "Utlegg"; };
+// v30.8: bom/ferje knyttet til en kjørestrekning viser hele strekningen (f.eks. «Sola–Porsgrunn»), ikke bare startstedet
+const expRoute = (x, tr) => { const l = tr && x.lid && (tr.legs || []).find(g => g.lid === x.lid); return l ? [l.from, l.to].map(v => String(v || "").trim()).filter(Boolean).join("–") : ""; };
+const expLabel = (x, tr) => { const rt = ["bom","ferje"].includes(x.type) ? expRoute(x, tr) : ""; const a = [EXP_TYPE[xType(x)] || "", (x.vendor || "").trim(), rt || (x.text || "").trim()].filter(Boolean); return a.filter((v, i) => a.findIndex(w => w.toLowerCase() === v.toLowerCase()) === i).join(" – ") || "Utlegg"; };
 // Fastpris onshore: fastprisen dekker bare reisen ut/hjem. Diett og hotell under oppholdet faktureres som etter regning.
 const fxOn = c => !!c && mobModeOf(c) === "fixed" && (c.planType || "offshore") === "felt";
 // Km til kunde: etter regning = «Km faktureres» (standard ja). Fastpris = bare når «Km i tillegg til fastpris» er valgt.
@@ -968,7 +970,7 @@ function tripMoney(tr, from, to){
     if (l.paidBy !== "firma") refund += x.toll + x.ferry;
     if (l.rebill !== false && !fixedMob){ rebill += (x.toll + x.ferry); if (x.toll + x.ferry > 0) expLines.push({kind: num(x.ferry) > 0 && num(x.toll) > 0 ? "bom_ferje" : num(x.ferry) > 0 ? "ferje" : "bom", text:`${bfLabel(x.toll, x.ferry)}${[l.from, l.to].filter(Boolean).join("–") ? " " + [l.from, l.to].filter(Boolean).join("–") : ""}`, date:l.date || t0, base:x.toll + x.ferry}); } if (l.rebill !== false && kmBilled(c)) kmCust += num(c.kmRate) > 0 ? num(l.km)*num(c.kmRate) : x.full; });
   let exp = 0;
-  (tr.expenses||[]).filter(x => inR(x.date || t0)).forEach(x => { exp += num(x.amount); if (x.paidBy !== "firma") refund += num(x.amount); if (expBilled(x, tr)){ rebill += num(x.amount); if (num(x.amount) > 0) expLines.push({kind:xType(x), text:expLabel(x), date:x.date || t0, base:num(x.amount)}); } });
+  (tr.expenses||[]).filter(x => inR(x.date || t0)).forEach(x => { exp += num(x.amount); if (x.paidBy !== "firma") refund += num(x.amount); if (expBilled(x, tr)){ rebill += num(x.amount); if (num(x.amount) > 0) expLines.push({kind:xType(x), text:expLabel(x, tr), date:x.date || t0, base:num(x.amount)}); } });
   const taxableDiet = Math.max(0, d.diet + d.night - d.taxfree);
   return {diet:d.diet, night:d.night, dietTaxable:taxableDiet, km, kmAmt, kmTax, tollFerry, exp, refund,
           toEmployee: d.diet + d.night + kmAmt + refund, custExp: rebill*(1+mk), custExpBase: rebill, expLines, markup: mk, kmCust, fixedMob, custDiet, custDietDays, custTotal: rebill*(1+mk) + kmCust + custDiet};
@@ -1473,7 +1475,7 @@ function vReiseMob(){
   <div class="quick"><button class="qb go" data-a="qExp" data-id="${esc(tr.id)}">+ Utlegg<small>med eller uten kvittering</small></button>${FIELD ? "" : `<button class="qb" data-a="signOpen" data-c="${esc(tr.contractId || "")}" data-f="${tr.start ? tr.start.slice(0,10) : ""}" data-t="${tr.end ? tr.end.slice(0,10) : ""}">Signer timeliste<small>kunden signerer her</small></button>`}<button class="qb" data-a="newTrip">+ Ny reise<small>enkel</small></button></div>
   <section class="card" style="display:grid;gap:8px"><span class="label">Reiseplan</span>${tr.plan ? `<div class="plan">${esc(tr.plan)}</div>` : `<p class="small muted" style="margin:0">${FIELD ? "Ingen reiseplan lagt inn." : "Ingen reiseplan lagt inn ennå. Fyll den inn på Mac før avreise."}</p>`}</section>
   ${(tr.legs||[]).length ? `<section class="card" style="display:grid;gap:6px"><span class="label">Kjøring</span>${tr.legs.map(l => `<div class="row spread"><span>${esc(l.from || "?")} → ${esc(l.to || "?")}</span><span class="num">${hr(l.km)} km${num(l.toll) + num(l.ferry) ? ` · ${kr(num(l.toll) + num(l.ferry))} kr` : ""}</span></div>`).join("")}</section>` : ""}
-  <section class="card" style="display:grid;gap:6px"><span class="label">Utlegg</span>${(tr.expenses||[]).length ? tr.expenses.map(x => `<div class="row spread"><span class="row">${rcThumb(x)}${esc(expLabel(x))} <span class="small muted">${x.date ? fmtDate(x.date) : ""}</span></span><span class="row" style="gap:6px"><b class="num">${kr(x.amount)}</b>${FIELD && tr.fLink && !x.lnk ? `<button class="btn ghost sm" data-a="fExpDel" data-t="${esc(tr.id)}" data-i="${(tr.expenses||[]).indexOf(x)}" aria-label="Slett utlegg">×</button>` : ""}</span></div>`).join("") : `<p class="small muted" style="margin:0">Ingen utlegg.</p>`}</section>
+  <section class="card" style="display:grid;gap:6px"><span class="label">Utlegg</span>${(tr.expenses||[]).length ? tr.expenses.map(x => `<div class="row spread"><span class="row">${rcThumb(x)}${esc(expLabel(x, tr))} <span class="small muted">${x.date ? fmtDate(x.date) : ""}</span></span><span class="row" style="gap:6px"><b class="num">${kr(x.amount)}</b>${FIELD && tr.fLink && !x.lnk ? `<button class="btn ghost sm" data-a="fExpDel" data-t="${esc(tr.id)}" data-i="${(tr.expenses||[]).indexOf(x)}" aria-label="Slett utlegg">×</button>` : ""}</span></div>`).join("") : `<p class="small muted" style="margin:0">Ingen utlegg.</p>`}</section>
   <div class="money"><div class="split"><div class="emp"><small>${hire ? "Innleid" : "Ansatt"} diett kr</small><b>${kr0(m.diet + m.night)}</b></div><div class="emp"><small>${hire ? "Innleid" : "Ansatt"} km kr</small><b>${kr0(m.kmAmt)}</b></div><div class="emp"><small>Til ${esc(fn)} kr</small><b>${kr0(m.toEmployee)}</b></div></div>
   <div class="split"><div class="cust"><small>Kunde diett kr</small><b>${kr0(m.custDiet)}</b></div><div class="cust"><small>Kunde km kr</small><b>${kr0(m.kmCust)}</b></div><div class="cust"><small>Kunde utlegg kr</small><b>${kr0(m.custExp)}</b></div></div></div>
   ${others.length ? `<section style="display:grid;gap:8px"><span class="label">Andre reiser</span>${others.map(x => `<div class="item" data-a="viewTrip" data-id="${esc(x.id)}"><div class="t"><b>${esc(x.title || "Reise")} – ${esc(personName(whoOf(x)))}</b><span class="small muted">${x.start ? fmtDateY(x.start.slice(0,10)) : ""}</span></div></div>`).join("")}</section>` : ""}`;
