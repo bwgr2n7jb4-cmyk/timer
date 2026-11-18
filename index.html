@@ -384,7 +384,7 @@ body.mob .btn{ padding:10px 16px }
 
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.6</span></div>
+    <div class="brand"><div class="mark">k<span>N</span>m Timer</div><span class="ver" id="ver">v2.7</span></div>
     <div class="sync" id="sync"><i class="dot"></i><span>Starter …</span></div>
     <button class="btn sm modeBtn" id="modeBtn" data-a="toggleMode">Mac-visning</button>
   </div>
@@ -399,7 +399,7 @@ body.mob .btn{ padding:10px 16px }
 <script>
 (function(){
 "use strict";
-const VERSION = "v2.6";
+const VERSION = "v2.7";
 const FIELD = true; // true i kNm Timer (mobilapp uten Claude)
 document.getElementById("ver").textContent = VERSION;
 
@@ -1868,7 +1868,7 @@ function buildPdfDoc({from, to, contractId, amounts, approval, who}){
       pdf.text(x + 8, y + 90, `Signert ${fmtDateY(approval.signedAt.slice(0,10))} kl. ${approval.signedAt.slice(11,16)} UTC`, {size:7, color:MUTED});
     } else {
       // Likt oppsett i begge felt: Signatur-linje, deretter navn over linjen «Navn og dato»
-      const nm = i === 1 ? (all ? "" : isHire(who) ? personName(who) + " (innleid)" : `${prof.name || ""}${prof.empNo ? ", ansattnr. " + prof.empNo : ""}`)
+      const nm = i === 1 ? (all ? "" : isHire(who) ? personName(who) : `${prof.name || ""}${prof.empNo ? ", ansattnr. " + prof.empNo : ""}`)
         : (approval && approval.manual ? `${approval.signerName || ""}${approval.signerTitle ? (approval.signerName ? ", " : "") + approval.signerTitle : ""}` : "");
       if (nm) pdf.text(x + 8, y + 81, pdf.fit(nm, 8.5, true, bw - 16), {size:8.5, bold:true});
       pdf.line(x + 8, y + 60, x + bw - 8, y + 60, MUTED, 0.5); pdf.text(x + 8, y + 71, "Signatur", {size:7, color:MUTED});
